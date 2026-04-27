@@ -1,233 +1,162 @@
-// src/render.test.ts — Tests for v0.2.0 render engine
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { assembleRenderData, computeAgeDays, renderFromData, type CandidateInfo, type ReflectionEvent } from './render.js';
 
-import { describe, it, expect } from 'vitest';
-import {
-  assembleRenderData,
-  renderFromData,
-  computeAgeLabel,
-  type ReflectionEvent,
-  type CandidateInfo,
-  type AssembleOptions,
-} from './render.js';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const loadFixture = (name: string) => JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', `${name}.json`), 'utf8')) as ReflectionEvent;
+const emptyFixture = loadFixture('empty');
+const richFixture = loadFixture('rich');
+const errorsOnlyFixture = loadFixture('errors-only');
+const compatibilityOldFixture = loadFixture('compatibility-old');
 
-function makeEvent(overrides: Record<string, any> = {}): ReflectionEvent {
-  return {
-    event: 'reflection-completed',
-    version: '1.1',
-    timestamp: '2026-04-27T06:00:00.000Z',
-    runtime: 'openclaw',
-    workspace: '/home/test/.openclaw/workspace',
-    reflection: {
-      from: null,
-      to: null,
-      watermark_before: '2026-04-26',
-      watermark_after: '2026-04-27',
-      duration_ms: 5200,
-      events_collected: 15,
-      candidates_generated: 2,
-      candidates_dropped: 3,
-      dropped_summary: { duplicate: 2, low_confidence: 1 },
-      dropped_items: [
-        { attempted_id: 'sha256:aaa', reason: 'duplicate', reason_detail: '与 xxx 重合', summary: '工具链报告测试通过但未验证' },
-        { attempted_id: 'sha256:bbb', reason: 'duplicate', reason_detail: '与 yyy 重合', summary: '模型超时处理策略重复' },
-        { attempted_id: null, reason: 'low_confidence', reason_detail: 'conf 0.15', summary: '日志格式建议' },
-      ],
-      reasons_triggered: ['manual'],
-      new_candidate_ids: ['sha256:candidate_1', 'sha256:candidate_2'],
-      ...overrides.reflection,
+function candidateLoader(id: string): CandidateInfo | null {
+  const map: Record<string, CandidateInfo> = {
+    'sha256:68b21d20a87ab861e13306048defad3d4e15206bad2b3bdaf7b43e4cb583709d': {
+      id,
+      domain: 'model_routing_failure',
+      confidence: 0.5,
+      status: 'pending',
+      summary: '(no summary)',
+      trigger_event_summary: '2026-04-26 pollinations API 故障诊断',
+      created_at: '2026-04-26T22:00:41.248Z',
     },
-    candidates_summary: {
-      pending: 5,
-      reviewing: 1,
-      shadow: 2,
-      graduated: 3,
-      high_confidence: [],
-      ...overrides.candidates_summary,
+    'sha256:f50ea43fc23971f1fa0af184cfe5e99217fbae80560ba795a8f018706cd947ce': {
+      id,
+      domain: 'unknown',
+      confidence: 0.5,
+      status: 'pending',
+      summary: '(no summary)',
+      created_at: '2026-04-26T22:00:41.260Z',
     },
-    errors: overrides.errors ?? [],
+    'sha256:11111111aaaaaaaa22222222bbbbbbbb33333333cccccccc44444444dddddddd': {
+      id,
+      domain: 'documentation_sync_failure',
+      confidence: 0.7,
+      status: 'pending',
+      summary: '(no summary - candidate from older version)',
+      created_at: '2026-04-25T10:00:00.000Z',
+    },
   };
+  return map[id] ?? null;
 }
 
-function makeCandidateLoader(candidates: Record<string, Partial<CandidateInfo>>) {
-  return (id: string): CandidateInfo | null => {
-    const c = candidates[id];
-    if (!c) return null;
-    return {
-      id: c.id ?? id.slice(0, 18) + '…',
-      domain: c.domain ?? 'test_domain',
-      confidence: c.confidence ?? 0.8,
-      status: c.status ?? 'pending',
-      summary: c.summary ?? '测试候选摘要',
-      trigger_event_summary: c.trigger_event_summary,
-      created_at: c.created_at ?? '2026-04-27T00:00:00.000Z',
-    };
-  };
+function backlogLoader(): CandidateInfo[] {
+  return [
+    {
+      id: 'sha256:68b21d20a87ab861e13306048defad3d4e15206bad2b3bdaf7b43e4cb583709d',
+      domain: 'model_routing_failure',
+      confidence: 0.8,
+      status: 'pending',
+      summary: 'old enough',
+      created_at: '2026-04-20T00:00:00.000Z',
+    },
+    {
+      id: 'sha256:short0000bbbb',
+      domain: 'unknown',
+      confidence: 0.95,
+      status: 'reviewing',
+      summary: 'ignore reviewing',
+      created_at: '2026-04-20T00:00:00.000Z',
+    },
+  ];
 }
 
-function assemble(event: ReflectionEvent, extra: Partial<AssembleOptions> = {}): ReturnType<typeof assembleRenderData> {
+function assemble(event: ReflectionEvent) {
   return assembleRenderData({
     event,
-    candidateLoader: extra.candidateLoader ?? makeCandidateLoader({
-      'sha256:candidate_1': { summary: '架构类任务禁用 gemini', trigger_event_summary: '图灵超时退出', confidence: 0.85, domain: 'model_routing' },
-      'sha256:candidate_2': { summary: '修订交付必须附自查证据', confidence: 0.6, domain: 'review_process' },
-    }),
-    backlogLoader: extra.backlogLoader ?? (() => []),
-    now: extra.now ?? new Date('2026-04-27T14:00:00+08:00'),
+    candidateLoader,
+    backlogLoader,
+    now: new Date('2026-04-27T14:00:00+08:00'),
   });
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
-
-describe('assembleRenderData + renderFromData', () => {
-  it('1. full fields — all sections present', () => {
-    const data = assemble(makeEvent());
-    const output = renderFromData(data);
-
-    expect(output).toContain('📚 自学习闭环日报 2026-04-27');
-    expect(output).toContain('采集 events: 15');
-    expect(output).toContain('新增 2');
-    expect(output).toContain('dropped 3');
-    expect(output).toContain('🆕 今日新增候选 (2)');
-    expect(output).toContain('架构类任务禁用 gemini');
-    expect(output).toContain('💭 触发：图灵超时退出');
-    expect(output).toContain('⚠️ 今日 dropped 候选 (3)');
-    expect(output).toContain('duplicate × 2');
-    expect(output).toContain('low_confidence × 1');
-    expect(output).toContain('工具链报告测试通过但未验证');
-    expect(output).toContain('📈 累计候选状态');
-    expect(output).toContain('pending: 5');
-    expect(output).toContain('v0.2.0');
+describe('computeAgeDays', () => {
+  it('returns 0 for same day', () => {
+    expect(computeAgeDays('2026-04-27T10:00:00+08:00', new Date('2026-04-27T18:00:00+08:00'))).toBe(0);
   });
 
-  it('2. candidate without summary (compatibility)', () => {
-    const data = assemble(makeEvent(), {
-      candidateLoader: makeCandidateLoader({
-        'sha256:candidate_1': { summary: '(no summary - candidate from older version)' },
-        'sha256:candidate_2': { summary: '(no summary - candidate from older version)' },
-      }),
-    });
-    const output = renderFromData(data);
-    expect(output).toContain('(no summary - candidate from older version)');
-  });
-
-  it('3. event without dropped_summary — no dropped section', () => {
-    const event = makeEvent({ reflection: { dropped_summary: undefined, dropped_items: undefined, candidates_dropped: 0, new_candidate_ids: ['sha256:candidate_1'] } });
-    const data = assemble(event);
-    const output = renderFromData(data);
-    expect(output).not.toContain('⚠️ 今日 dropped');
-  });
-
-  it('4. dropped_items only 1 item', () => {
-    const event = makeEvent({
-      reflection: {
-        dropped_summary: { other: 1 },
-        dropped_items: [{ attempted_id: null, reason: 'other', summary: '单条测试' }],
-        candidates_dropped: 1,
-      },
-    });
-    const data = assemble(event);
-    expect(data.dropped_items_top3).toHaveLength(1);
-    const output = renderFromData(data);
-    expect(output).toContain('[other] 单条测试');
-  });
-
-  it('5. dropped_items 5 items — only top 3 shown', () => {
-    const items = Array.from({ length: 5 }, (_, i) => ({
-      attempted_id: `id_${i}`,
-      reason: i < 2 ? 'duplicate' : 'low_confidence',
-      summary: `item ${i} summary`,
-    }));
-    const event = makeEvent({
-      reflection: {
-        dropped_summary: { duplicate: 2, low_confidence: 3 },
-        dropped_items: items,
-        candidates_dropped: 5,
-      },
-    });
-    const data = assemble(event);
-    expect(data.dropped_items_top3).toHaveLength(3);
-    // Should have diversity: at least one duplicate and one low_confidence
-    const reasons = data.dropped_items_top3.map(d => d.reason);
-    expect(reasons).toContain('duplicate');
-    expect(reasons).toContain('low_confidence');
-  });
-
-  it('6. high_conf_backlog empty — no fire section', () => {
-    const data = assemble(makeEvent(), { backlogLoader: () => [] });
-    const output = renderFromData(data);
-    expect(output).not.toContain('🔥');
-  });
-
-  it('7. high_conf_backlog with items', () => {
-    const data = assemble(makeEvent(), {
-      backlogLoader: () => [
-        { id: 'sha256:old1', domain: 'test', confidence: 0.85, status: 'pending', summary: 'old', created_at: '2026-04-20T00:00:00Z' },
-        { id: 'sha256:new1', domain: 'test', confidence: 0.75, status: 'pending', summary: 'new', created_at: '2026-04-27T00:00:00Z' },
-        { id: 'sha256:low1', domain: 'test', confidence: 0.5, status: 'pending', summary: 'low conf', created_at: '2026-04-20T00:00:00Z' },
-      ],
-    });
-    const output = renderFromData(data);
-    expect(output).toContain('🔥');
-    expect(output).toContain('⚠️ 7 天未审');
-    expect(output).toContain('今日新增');
-    // low conf should NOT be in backlog
-    expect(data.high_conf_backlog).toHaveLength(2);
-  });
-
-  it('8. errors present', () => {
-    const event = makeEvent({ errors: ['LLM timeout after 30s', 'Parse error'] });
-    const data = assemble(event);
-    const output = renderFromData(data);
-    expect(output).toContain('❗ 本次有错误');
-    expect(output).toContain('LLM timeout after 30s');
-    expect(output).toContain('Parse error');
-  });
-
-  it('9. no new_candidate_ids — no 🆕 section', () => {
-    const event = makeEvent({ reflection: { new_candidate_ids: undefined, candidates_generated: 0 } });
-    const data = assemble(event);
-    const output = renderFromData(data);
-    expect(output).not.toContain('🆕');
-  });
-
-  it('10. missing fields do not crash', () => {
-    const minimalEvent: ReflectionEvent = {
-      event: 'reflection-completed',
-      version: '1.0',
-      timestamp: '2026-04-27T00:00:00Z',
-      runtime: 'openclaw',
-      workspace: '/test',
-      reflection: {
-        from: null, to: null,
-        watermark_before: null, watermark_after: null,
-        duration_ms: 100,
-        events_collected: 0,
-        candidates_generated: 0,
-        candidates_dropped: 0,
-        reasons_triggered: [],
-      },
-      candidates_summary: { pending: 0, reviewing: 0, shadow: 0, graduated: 0, high_confidence: [] },
-      errors: [],
-    };
-    const data = assembleRenderData({ event: minimalEvent, candidateLoader: () => null, backlogLoader: () => [] });
-    const output = renderFromData(data);
-    expect(output).toContain('📚 自学习闭环日报');
-    expect(output).toContain('v0.2.0');
+  it('returns whole day difference', () => {
+    expect(computeAgeDays('2026-04-23T10:00:00+08:00', new Date('2026-04-27T18:00:00+08:00'))).toBe(4);
   });
 });
 
-describe('computeAgeLabel', () => {
-  const now = new Date('2026-04-27T14:00:00+08:00');
-
-  it('today → 今日新增', () => {
-    expect(computeAgeLabel('2026-04-27T10:00:00+08:00', now)).toBe('今日新增');
+describe('assembleRenderData', () => {
+  it('assembles rich fixture with titles and dropped groups', () => {
+    const data = assemble(richFixture as ReflectionEvent);
+    expect(data.newCandidates).toHaveLength(2);
+    expect(data.newCandidates[0]?.title).toBe('模型路由故障识别');
+    expect(data.newCandidates[1]?.title).toBe('未分类候选');
+    expect(data.newCandidates[0]?.trigger).toContain('pollinations API 故障诊断');
+    expect(data.newCandidates[0]?.note).toBe('(no summary)');
+    expect(data.droppedGroups).toHaveLength(2);
+    expect(data.backlog[0]?.ageDays).toBeGreaterThanOrEqual(4);
   });
 
-  it('2 days → N 天未审', () => {
-    expect(computeAgeLabel('2026-04-25T10:00:00+08:00', now)).toBe('2 天未审');
+  it('keeps note empty when summary is used as title', () => {
+    const event = structuredClone(richFixture) as ReflectionEvent;
+    const loader = () => ({
+      id: 'sha256:68b21d20a87ab861e13306048defad3d4e15206bad2b3bdaf7b43e4cb583709d',
+      domain: 'model_routing_failure',
+      confidence: 0.5,
+      status: 'pending',
+      summary: '标题已经够说明问题了',
+      created_at: '2026-04-26T22:00:41.248Z',
+    });
+    const data = assembleRenderData({ event, candidateLoader: loader, backlogLoader: () => [], now: new Date('2026-04-27T14:00:00+08:00') });
+    expect(data.newCandidates[0]?.title).toBe('标题已经够说明问题了');
+    expect(data.newCandidates[0]?.note).toBeUndefined();
   });
 
-  it('5 days → ⚠️ N 天未审', () => {
-    expect(computeAgeLabel('2026-04-22T10:00:00+08:00', now)).toBe('⚠️ 5 天未审');
+  it('falls back gracefully when candidate cannot be loaded', () => {
+    const data = assembleRenderData({ event: richFixture as ReflectionEvent, candidateLoader: () => null, backlogLoader: () => [] });
+    expect(data.newCandidates[0]?.title).toMatch(/候选|未分类候选/);
+    expect(data.newCandidates[0]?.shortId).toBe('68b21d20');
+  });
+
+  it('handles errors-only fixture', () => {
+    const data = assemble(errorsOnlyFixture as ReflectionEvent);
+    expect(data.errors).toHaveLength(2);
+    expect(data.candidatesGenerated).toBe(0);
+  });
+
+  it('handles compatibility-old fixture', () => {
+    const data = assemble(compatibilityOldFixture as ReflectionEvent);
+    expect(data.newCandidates[0]?.title).toBe('文档同步失败');
+    expect(data.newCandidates[0]?.note).toBe('(no summary - candidate from older version)');
+  });
+});
+
+describe('renderFromData snapshots', () => {
+  it('renders rich fixture', () => {
+    expect(renderFromData(assemble(richFixture as ReflectionEvent))).toMatchSnapshot();
+  });
+
+  it('renders empty fixture', () => {
+    expect(renderFromData(assemble(emptyFixture as ReflectionEvent))).toMatchSnapshot();
+  });
+
+  it('renders errors-only fixture', () => {
+    expect(renderFromData(assemble(errorsOnlyFixture as ReflectionEvent))).toMatchSnapshot();
+  });
+
+  it('renders compatibility-old fixture', () => {
+    expect(renderFromData(assemble(compatibilityOldFixture as ReflectionEvent))).toMatchSnapshot();
+  });
+
+  it('includes overdue bulk review action when backlog exists', () => {
+    const output = renderFromData(assemble(richFixture as ReflectionEvent));
+    expect(output).toContain('处理超期未审：openclaw-learn review list --status pending --min-conf 0.7');
+  });
+
+  it('always includes details action', () => {
+    const output = renderFromData(assemble(emptyFixture as ReflectionEvent));
+    expect(output).toContain('详情：openclaw-learn review show <ID>');
+  });
+
+  it('shows error section only when errors exist', () => {
+    expect(renderFromData(assemble(errorsOnlyFixture as ReflectionEvent))).toContain('═══ ❗ 错误 ═══');
+    expect(renderFromData(assemble(emptyFixture as ReflectionEvent))).not.toContain('═══ ❗ 错误 ═══');
   });
 });

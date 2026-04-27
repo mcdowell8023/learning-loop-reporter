@@ -1,0 +1,63 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`sections > actions section with overdue backlog 1`] = `
+"═══ 🎯 现在该做什么 ═══
+1. review 新候选（ID: 68b21d20 / f50ea43f）
+2. 处理超期未审：openclaw-learn review list --status pending --min-conf 0.7
+3. 详情：openclaw-learn review show <ID>"
+`;
+
+exports[`sections > actions section without new candidates 1`] = `
+"═══ 🎯 现在该做什么 ═══
+1. 处理超期未审：openclaw-learn review list --status pending --min-conf 0.7
+2. 详情：openclaw-learn review show <ID>"
+`;
+
+exports[`sections > actions section without overdue backlog 1`] = `
+"═══ 🎯 现在该做什么 ═══
+1. review 新候选（ID: 68b21d20 / f50ea43f）
+2. 详情：openclaw-learn review show <ID>"
+`;
+
+exports[`sections > cumulative section snapshot 1`] = `
+"═══ 📊 累计 ═══
+pending 6 · reviewing 0 · shadow 0 · graduated 0"
+`;
+
+exports[`sections > dropped section empty fallback 1`] = `
+"═══ ⚠️ 被丢弃 (0) ═══
+今天没有被丢弃的候选。"
+`;
+
+exports[`sections > dropped section snapshot 1`] = `
+"═══ ⚠️ 被丢弃 (3) ═══
+🔁 重复 (2)
+   • 工具链报告测试通过但实际未在生产环境验证
+   • 发版前必须跑完整测试矩阵
+
+📉 信号太弱 (1)
+   • 日志格式优化建议"
+`;
+
+exports[`sections > new candidates section empty fallback 1`] = `
+"═══ 🆕 新候选 ═══
+今天没有新候选。"
+`;
+
+exports[`sections > new candidates section snapshot 1`] = `
+"═══ 🆕 新候选 ═══
+
+▸ 模型路由故障识别 [pending · conf 0.5]
+   触发：pollinations API 故障诊断
+   说明：(no summary)
+   ID: 68b21d20
+
+▸ 未分类候选 [pending · conf 0.5]
+   说明：(no summary)
+   ID: f50ea43f"
+`;
+
+exports[`sections > overview section snapshot 1`] = `
+"═══ 总览 ═══
+22 events · 2 新候选 · 3 被丢弃 · 耗时 5.2s"
+`;

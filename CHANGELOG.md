@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.0] - 2026-04-27 - Readability overhaul
+
+### Added
+- `src/domain-titles.ts`：domain → 中文标题映射、`titleForCandidate()`、`shortId()`
+- `src/sections/` 程序化 section 渲染：overview / new-candidates / dropped / cumulative / actions
+- `fixtures/rich.json` / `empty.json` / `errors-only.json` / `compatibility-old.json`
+- `preview --fixture <name>`：开发期直接预览内置样例
+- `preview --raw`：输出组装后的 JSON 结构供排查
+- 41 个测试用例，覆盖标题策略、section、render snapshot、CLI 和发送逻辑
+
+### Changed
+- 新候选展示改为 3~4 行紧凑卡片：标题 / 触发 / 说明 / 短 ID
+- 候选标题优先级改为：summary → 中文 domain → 原始 domain → 短 ID
+- dropped 段从“聚合 + 前 3 条”双层结构改为单层 emoji 分组
+- 重复命令从每条候选中移除，统一收口到「现在该做什么」段
+- 每段统一使用 `═══ {title} ═══` 分隔，适配飞书等宽阅读
+- README 示例升级为 v0.3.0 新版版式
+- `cli.ts` 改为可测试入口 `runCli()`
+
+### Removed
+- 删除 `templates/daily-report.tmpl`，彻底弃用模板字符串渲染
+
 ## [0.2.0] - 2026-04-27 - Three-section daily report
 
 ### Added

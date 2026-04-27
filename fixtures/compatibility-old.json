@@ -1,0 +1,44 @@
+{
+  "event": "reflection-completed",
+  "version": "1.0",
+  "timestamp": "2026-04-27T09:00:00.000Z",
+  "runtime": "openclaw",
+  "workspace": "/home/mcdowell/.openclaw/workspace",
+  "reflection": {
+    "from": null,
+    "to": null,
+    "watermark_before": "2026-04-26",
+    "watermark_after": "2026-04-27",
+    "duration_ms": 2100,
+    "events_collected": 5,
+    "candidates_generated": 1,
+    "candidates_dropped": 1,
+    "dropped_summary": { "schema_invalid": 1 },
+    "dropped_items": [
+      { "attempted_id": null, "reason": "schema_invalid", "reason_detail": "missing required field summary" }
+    ],
+    "reasons_triggered": ["manual"],
+    "new_candidate_ids": [
+      "sha256:11111111aaaaaaaa22222222bbbbbbbb33333333cccccccc44444444dddddddd"
+    ]
+  },
+  "candidates_summary": {
+    "pending": 1,
+    "reviewing": 0,
+    "shadow": 0,
+    "graduated": 0,
+    "high_confidence": []
+  },
+  "errors": [],
+  "__candidate_data": {
+    "sha256:11111111aaaaaaaa22222222bbbbbbbb33333333cccccccc44444444dddddddd": {
+      "id": "sha256:11111111aaaaaaaa22222222bbbbbbbb33333333cccccccc44444444dddddddd",
+      "domain": "documentation_sync_failure",
+      "confidence": 0.7,
+      "status": "pending",
+      "summary": "(no summary - candidate from older version)",
+      "created_at": "2026-04-25T10:00:00.000Z"
+    }
+  },
+  "__backlog": []
+}

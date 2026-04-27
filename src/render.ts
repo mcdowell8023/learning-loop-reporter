@@ -1,11 +1,11 @@
-// src/render.ts — Template renderer for reflection events (v0.2.0)
-// Renders three-section daily report: metrics + content + actions
-
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-// ─── Types ───────────────────────────────────────────────────────────────────
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { shortId, titleForCandidate } from './domain-titles.js';
+import { renderActionsSection } from './sections/actions.js';
+import { renderCumulativeSection } from './sections/cumulative.js';
+import { renderDroppedSection } from './sections/dropped.js';
+import { renderNewCandidatesSection } from './sections/new-candidates.js';
+import { renderOverviewSection } from './sections/overview.js';
 
 export interface DroppedItem {
   attempted_id?: string | null;
@@ -46,386 +46,226 @@ export interface ReflectionEvent {
 
 export interface CandidateInfo {
   id: string;
-  domain: string;
+  domain?: string;
   confidence: number;
   status: string;
-  summary: string;
+  summary?: string;
   trigger_event_summary?: string;
   created_at: string;
 }
 
+export interface RenderCandidateCard {
+  title: string;
+  shortId: string;
+  status: string;
+  confidence: number;
+  trigger?: string;
+  note?: string;
+}
+
+export interface DroppedGroup {
+  reason: string;
+  label: string;
+  count: number;
+  items: string[];
+}
+
+export interface HighConfidenceBacklogItem {
+  id: string;
+  shortId: string;
+  confidence: number;
+  ageDays: number;
+}
+
 export interface RenderData {
   date: string;
-  events_collected: number;
-  candidates_generated: number;
-  candidates_dropped: number;
-  duration_seconds: string;
-
-  has_new_candidates: boolean;
-  new_candidates: Array<CandidateInfo & { index: number }>;
-
-  has_dropped: boolean;
-  dropped_breakdown: Array<{ reason: string; count: number }>;
-  dropped_items_top3: DroppedItem[];
-
-  status_pending: number;
-  status_reviewing: number;
-  status_shadow: number;
-  status_graduated: number;
-
-  has_high_conf_backlog: boolean;
-  high_conf_backlog: Array<{ id: string; confidence: number; age_label: string }>;
-
-  errors_present: boolean;
+  version: string;
+  eventsCollected: number;
+  candidatesGenerated: number;
+  candidatesDropped: number;
+  durationSeconds: string;
+  newCandidates: RenderCandidateCard[];
+  droppedGroups: DroppedGroup[];
+  counts: {
+    pending: number;
+    reviewing: number;
+    shadow: number;
+    graduated: number;
+  };
+  backlog: HighConfidenceBacklogItem[];
   errors: string[];
 }
-
-// ─── Candidate loading ───────────────────────────────────────────────────────
-
-/** Load candidate info from the SQLite store via the learning-loop API */
-export function loadCandidateFromDb(
-  candidatesDir: string,
-  candidateId: string,
-): CandidateInfo | null {
-  // Scan date directories for the candidate markdown file
-  if (!existsSync(candidatesDir)) return null;
-
-  const shortId = candidateId.slice(0, 15);
-  const dateDirs = readdirSync(candidatesDir).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
-
-  for (const dateDir of dateDirs) {
-    const dirPath = join(candidatesDir, dateDir);
-    try {
-      const files = readdirSync(dirPath);
-      for (const file of files) {
-        if (!file.endsWith('.md')) continue;
-        // File format: sha256:X-problem_category.md where X matches shortId start
-        const content = readFileSync(join(dirPath, file), 'utf-8');
-        const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-        if (!fmMatch) continue;
-        const fm = fmMatch[1]!;
-
-        // Check if this is the right candidate
-        const idMatch = fm.match(/^id:\s*(.+)$/m);
-        if (!idMatch) continue;
-        const fileId = idMatch[1]!.trim();
-        if (fileId !== candidateId) continue;
-
-        // Parse frontmatter
-        const get = (key: string): string | undefined => {
-          const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
-          return m?.[1]?.trim();
-        };
-
-        return {
-          id: truncateId(candidateId),
-          domain: get('problem_category') ?? get('scope') ?? 'unknown',
-          confidence: parseFloat(get('confidence') ?? '0.5'),
-          status: get('state') ?? 'pending',
-          summary: get('summary') ?? '(no summary - candidate from older version)',
-          trigger_event_summary: get('trigger_event_summary'),
-          created_at: get('created_at') ?? new Date().toISOString(),
-        };
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-/** Load candidate from SQLite DB directly */
-export function loadCandidateFromSqlite(
-  dbPath: string,
-  candidateId: string,
-): CandidateInfo | null {
-  // We'll use a simpler approach: exec sqlite3 query
-  try {
-    const { execSync } = require('node:child_process') as typeof import('node:child_process');
-    const query = `SELECT json FROM candidates WHERE strategy_id = '${candidateId.replace(/'/g, "''")}' LIMIT 1`;
-    const result = execSync(`sqlite3 '${dbPath}' "${query}"`, {
-      timeout: 5000,
-      encoding: 'utf-8',
-    }).trim();
-    if (!result) return null;
-    const data = JSON.parse(result);
-    const strategy = data.strategy ?? data;
-    return {
-      id: truncateId(candidateId),
-      domain: strategy.problem_category ?? strategy.scope ?? 'unknown',
-      confidence: strategy.confidence ?? 0.5,
-      status: data.state ?? 'pending',
-      summary: strategy.summary ?? '(no summary - candidate from older version)',
-      trigger_event_summary: strategy.trigger_event?.summary,
-      created_at: strategy.created_at ?? new Date().toISOString(),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function truncateId(id: string): string {
-  // sha256:68b21d20a87ab... → sha256:68b21...
-  if (id.startsWith('sha256:') && id.length > 20) {
-    return id.slice(0, 18) + '…';
-  }
-  return id;
-}
-
-// ─── Age label ───────────────────────────────────────────────────────────────
-
-export function computeAgeLabel(createdAt: string, now?: Date): string {
-  const created = new Date(createdAt);
-  const today = now ?? new Date();
-  const diffMs = today.getTime() - created.getTime();
-  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
-
-  if (diffDays < 1) return '今日新增';
-  if (diffDays <= 3) return `${diffDays} 天未审`;
-  return `⚠️ ${diffDays} 天未审`;
-}
-
-// ─── Data assembly ───────────────────────────────────────────────────────────
 
 export interface AssembleOptions {
   event: ReflectionEvent;
   candidatesDir?: string;
-  dbPath?: string;
   now?: Date;
-  /** Pre-loaded candidates (for testing) */
   candidateLoader?: (id: string) => CandidateInfo | null;
-  /** Pre-loaded backlog (for testing) */
   backlogLoader?: () => CandidateInfo[];
 }
 
-export function assembleRenderData(opts: AssembleOptions): RenderData {
-  const { event } = opts;
-  const date = event.timestamp.split('T')[0] ?? event.timestamp;
-  const durationSeconds = (event.reflection.duration_ms / 1000).toFixed(1);
-  const now = opts.now ?? new Date();
+export function loadCandidateFromDb(candidatesDir: string, candidateId: string): CandidateInfo | null {
+  if (!existsSync(candidatesDir)) return null;
+  const dateDirs = readdirSync(candidatesDir).filter(dir => /^\d{4}-\d{2}-\d{2}$/.test(dir));
 
-  // Load new candidates
-  const newCandidateIds = event.reflection.new_candidate_ids ?? [];
-  const loadCandidate = opts.candidateLoader ?? ((id: string) => {
-    if (opts.dbPath) {
-      const c = loadCandidateFromSqlite(opts.dbPath, id);
-      if (c) return c;
+  for (const dateDir of dateDirs) {
+    const dirPath = join(candidatesDir, dateDir);
+    const files = readdirSync(dirPath).filter(file => file.endsWith('.md'));
+    for (const file of files) {
+      const fullPath = join(dirPath, file);
+      const content = readFileSync(fullPath, 'utf8');
+      const frontmatter = parseFrontmatter(content);
+      if (!frontmatter || frontmatter.id !== candidateId) continue;
+      return {
+        id: candidateId,
+        domain: frontmatter.problem_category ?? frontmatter.scope ?? 'unknown',
+        confidence: parseFloat(frontmatter.confidence ?? '0.5'),
+        status: frontmatter.state ?? 'pending',
+        summary: frontmatter.summary ?? '(no summary - candidate from older version)',
+        trigger_event_summary: frontmatter.trigger_event_summary,
+        created_at: frontmatter.created_at ?? new Date().toISOString(),
+      };
     }
-    if (opts.candidatesDir) {
-      return loadCandidateFromDb(opts.candidatesDir, id);
-    }
-    return null;
-  });
+  }
 
-  const newCandidates = newCandidateIds.map((id, i) => {
-    const info = loadCandidate(id);
-    return {
-      index: i + 1,
-      id: info?.id ?? truncateId(id),
-      domain: info?.domain ?? 'unknown',
-      confidence: info?.confidence ?? 0.5,
-      status: info?.status ?? 'pending',
-      summary: info?.summary ?? '(no summary - candidate from older version)',
-      trigger_event_summary: info?.trigger_event_summary,
-      created_at: info?.created_at ?? now.toISOString(),
-    };
-  });
-
-  // Dropped breakdown
-  const droppedSummary = event.reflection.dropped_summary ?? {};
-  const droppedBreakdown = Object.entries(droppedSummary)
-    .map(([reason, count]) => ({ reason, count }))
-    .sort((a, b) => b.count - a.count);
-
-  // Dropped items top 3
-  const droppedItems = event.reflection.dropped_items ?? [];
-  const droppedItemsTop3 = selectTop3DroppedItems(droppedItems);
-
-  // High confidence backlog
-  const loadBacklog = opts.backlogLoader ?? (() => {
-    // Scan all pending candidates from markdown files
-    if (!opts.candidatesDir || !existsSync(opts.candidatesDir)) return [];
-    const results: CandidateInfo[] = [];
-    try {
-      const dateDirs = readdirSync(opts.candidatesDir).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
-      for (const dateDir of dateDirs) {
-        const dirPath = join(opts.candidatesDir, dateDir);
-        try {
-          const files = readdirSync(dirPath).filter(f => f.endsWith('.md'));
-          for (const file of files) {
-            try {
-              const content = readFileSync(join(dirPath, file), 'utf-8');
-              const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-              if (!fmMatch) continue;
-              const fm = fmMatch[1]!;
-              const get = (key: string) => fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))?.[1]?.trim();
-              const state = get('state');
-              if (state !== 'pending') continue;
-              const conf = parseFloat(get('confidence') ?? '0');
-              if (conf < 0.7) continue;
-              results.push({
-                id: truncateId(get('id') ?? file),
-                domain: get('problem_category') ?? 'unknown',
-                confidence: conf,
-                status: 'pending',
-                summary: get('summary') ?? '(no summary)',
-                created_at: get('created_at') ?? now.toISOString(),
-              });
-            } catch { continue; }
-          }
-        } catch { continue; }
-      }
-    } catch { /* ignore */ }
-    return results;
-  });
-  const backlog = loadBacklog();
-  const highConfBacklog = backlog
-    .filter(c => c.confidence >= 0.7 && c.status === 'pending')
-    .map(c => ({
-      id: c.id,
-      confidence: c.confidence,
-      age_label: computeAgeLabel(c.created_at, now),
-    }));
-
-  return {
-    date,
-    events_collected: event.reflection.events_collected,
-    candidates_generated: event.reflection.candidates_generated,
-    candidates_dropped: event.reflection.candidates_dropped,
-    duration_seconds: durationSeconds,
-
-    has_new_candidates: newCandidates.length > 0,
-    new_candidates: newCandidates,
-
-    has_dropped: droppedBreakdown.length > 0,
-    dropped_breakdown: droppedBreakdown,
-    dropped_items_top3: droppedItemsTop3,
-
-    status_pending: event.candidates_summary.pending,
-    status_reviewing: event.candidates_summary.reviewing,
-    status_shadow: event.candidates_summary.shadow,
-    status_graduated: event.candidates_summary.graduated,
-
-    has_high_conf_backlog: highConfBacklog.length > 0,
-    high_conf_backlog: highConfBacklog,
-
-    errors_present: event.errors.length > 0,
-    errors: event.errors,
-  };
+  return null;
 }
 
-/** Select top 3 dropped items with diversity by reason */
-function selectTop3DroppedItems(items: DroppedItem[]): DroppedItem[] {
-  if (items.length <= 3) return items;
-
-  // Pick one from each unique reason first, then fill
-  const byReason = new Map<string, DroppedItem[]>();
-  for (const item of items) {
-    const key = item.reason;
-    if (!byReason.has(key)) byReason.set(key, []);
-    byReason.get(key)!.push(item);
-  }
-
-  const result: DroppedItem[] = [];
-  // One from each reason
-  for (const [, group] of byReason) {
-    if (result.length >= 3) break;
-    // Prefer items with longer summaries
-    const sorted = [...group].sort((a, b) => (b.summary?.length ?? 0) - (a.summary?.length ?? 0));
-    result.push(sorted[0]!);
-  }
-  // Fill remaining
-  for (const item of items) {
-    if (result.length >= 3) break;
-    if (!result.includes(item)) result.push(item);
+function parseFrontmatter(content: string): Record<string, string> | null {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return null;
+  const result: Record<string, string> = {};
+  for (const line of match[1].split('\n')) {
+    const kv = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
+    if (kv) result[kv[1]] = kv[2];
   }
   return result;
 }
 
-// ─── Template rendering ──────────────────────────────────────────────────────
+export function computeAgeDays(createdAt: string, now: Date = new Date()): number {
+  const created = new Date(createdAt);
+  return Math.floor((now.getTime() - created.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function droppedReasonLabel(reason: string): string {
+  switch (reason) {
+    case 'duplicate':
+      return '🔁 重复';
+    case 'low_confidence':
+      return '📉 置信度低';
+    case 'low_signal':
+      return '📉 信号太弱';
+    case 'schema_invalid':
+      return '🚫 格式错误';
+    default:
+      return `❓ ${reason}`;
+  }
+}
+
+function summarizeDroppedItem(item: DroppedItem): string {
+  return item.summary?.trim() || item.reason_detail?.trim() || '(no detail)';
+}
+
+export function assembleRenderData(opts: AssembleOptions): RenderData {
+  const { event } = opts;
+  const now = opts.now ?? new Date();
+  const date = event.timestamp.slice(0, 10);
+  const loadCandidate = opts.candidateLoader ?? ((id: string) => (opts.candidatesDir ? loadCandidateFromDb(opts.candidatesDir, id) : null));
+  const backlogLoader = opts.backlogLoader ?? (() => []);
+
+  const newCandidates = (event.reflection.new_candidate_ids ?? []).map(id => {
+    const candidate = loadCandidate(id);
+    const fallback: CandidateInfo = candidate ?? {
+      id,
+      domain: 'unknown',
+      confidence: 0.5,
+      status: 'pending',
+      summary: '(no summary)',
+      created_at: now.toISOString(),
+    };
+
+    const title = titleForCandidate({ id: fallback.id, summary: fallback.summary, domain: fallback.domain });
+    const usedSummaryAsTitle = !!fallback.summary?.trim() && title === titleForCandidate({ id: fallback.id, summary: fallback.summary, domain: fallback.domain }) && title === (fallback.summary!.trim().length > 30 ? `${fallback.summary!.trim().slice(0, 30)}…` : fallback.summary!.trim()) && fallback.summary !== '(no summary)' && !fallback.summary?.includes('no summary - candidate from older version');
+    const note = usedSummaryAsTitle ? undefined : (fallback.summary?.trim() || '(no summary)');
+
+    return {
+      title,
+      shortId: shortId(fallback.id),
+      status: fallback.status,
+      confidence: fallback.confidence,
+      trigger: fallback.trigger_event_summary?.trim() || undefined,
+      note,
+    } satisfies RenderCandidateCard;
+  });
+
+  const droppedGroups = Object.entries(groupDroppedItems(event.reflection.dropped_items ?? [])).map(([reason, items]) => ({
+    reason,
+    label: droppedReasonLabel(reason),
+    count: items.length,
+    items,
+  }));
+
+  const backlog = backlogLoader()
+    .filter(item => item.status === 'pending' && item.confidence >= 0.7)
+    .map(item => ({
+      id: item.id,
+      shortId: shortId(item.id),
+      confidence: item.confidence,
+      ageDays: computeAgeDays(item.created_at, now),
+    }))
+    .sort((a, b) => b.ageDays - a.ageDays || b.confidence - a.confidence);
+
+  return {
+    date,
+    version: '0.3.0',
+    eventsCollected: event.reflection.events_collected,
+    candidatesGenerated: event.reflection.candidates_generated,
+    candidatesDropped: event.reflection.candidates_dropped,
+    durationSeconds: (event.reflection.duration_ms / 1000).toFixed(1),
+    newCandidates,
+    droppedGroups,
+    counts: {
+      pending: event.candidates_summary.pending,
+      reviewing: event.candidates_summary.reviewing,
+      shadow: event.candidates_summary.shadow,
+      graduated: event.candidates_summary.graduated,
+    },
+    backlog,
+    errors: event.errors,
+  };
+}
+
+function groupDroppedItems(items: DroppedItem[]): Record<string, string[]> {
+  const grouped: Record<string, string[]> = {};
+  for (const item of items) {
+    const key = item.reason || 'unknown';
+    grouped[key] ??= [];
+    grouped[key].push(summarizeDroppedItem(item));
+  }
+  return grouped;
+}
+
+function renderErrorsSection(data: RenderData): string {
+  if (data.errors.length === 0) return '';
+  return ['═══ ❗ 错误 ═══', ...data.errors.map(error => `- ${error}`)].join('\n');
+}
 
 export function renderFromData(data: RenderData): string {
-  const lines: string[] = [];
-  const p = (s: string) => lines.push(s);
+  const sections = [
+    `📚 学习闭环日报｜${data.date}`,
+    '',
+    renderOverviewSection(data),
+    renderNewCandidatesSection(data),
+    renderDroppedSection(data),
+    renderCumulativeSection(data),
+    renderActionsSection(data),
+    renderErrorsSection(data),
+    `🤖 by learning-loop-reporter v${data.version}`,
+  ].filter(Boolean);
 
-  p(`📚 自学习闭环日报 ${data.date}`);
-  p('');
-  p('📊 反思摘要');
-  p(`- 采集 events: ${data.events_collected} | 新增 ${data.candidates_generated} | dropped ${data.candidates_dropped} | 耗时 ${data.duration_seconds}s`);
-
-  if (data.has_new_candidates) {
-    p('');
-    p(`🆕 今日新增候选 (${data.candidates_generated})`);
-    p('');
-    for (const c of data.new_candidates) {
-      p(`【${c.index}】${c.id}`);
-      p(`  conf: ${c.confidence} | domain: ${c.domain} | status: ${c.status}`);
-      p(`  📝 ${c.summary}`);
-      if (c.trigger_event_summary) {
-        p(`  💭 触发：${c.trigger_event_summary}`);
-      }
-      p(`  ➜ openclaw-learn review show ${c.id}`);
-      p('');
-    }
-  }
-
-  if (data.has_dropped) {
-    p('');
-    p(`⚠️ 今日 dropped 候选 (${data.candidates_dropped})`);
-    p('');
-    p('按原因聚合：');
-    for (const b of data.dropped_breakdown) {
-      p(`- ${b.reason} × ${b.count}`);
-    }
-    if (data.dropped_items_top3.length > 0) {
-      p('');
-      p('具体内容（前 3 条）：');
-      for (const item of data.dropped_items_top3) {
-        p(`- [${item.reason}] ${item.summary ?? '(no detail)'}`);
-      }
-    }
-    p(`  ➜ 完整列表: openclaw-learn audit dropped --date ${data.date}`);
-  }
-
-  p('');
-  p('📈 累计候选状态');
-  p(`- pending: ${data.status_pending} | reviewing: ${data.status_reviewing} | shadow: ${data.status_shadow} | graduated: ${data.status_graduated}`);
-
-  if (data.has_high_conf_backlog) {
-    p('');
-    p('🔥 待你审核的高分候选 (≥ 0.7)');
-    for (const c of data.high_conf_backlog) {
-      p(`- ${c.id} | conf ${c.confidence} | ${c.age_label}`);
-    }
-    p('  ➜ 批量审核: openclaw-learn review list --status pending --min-conf 0.7');
-  }
-
-  if (data.errors_present) {
-    p('');
-    p('❗ 本次有错误');
-    for (const e of data.errors) {
-      p(`- ${e}`);
-    }
-  }
-
-  p('');
-  p('📁 详情命令');
-  p('- openclaw-learn review show <id>');
-  p('- openclaw-learn audit dropped --date YYYY-MM-DD');
-  p('');
-  p('🤖 by learning-loop-reporter v0.2.0');
-
-  return lines.join('\n') + '\n';
+  return `${sections.join('\n\n')}\n`;
 }
 
-/** Convenience: assemble + render in one call */
 export function renderReport(opts: AssembleOptions): string {
-  const data = assembleRenderData(opts);
-  return renderFromData(data);
-}
-
-export function loadDefaultTemplate(): string {
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const tmplPath = resolve(__dirname, '..', 'templates', 'daily-report.tmpl');
-  return readFileSync(tmplPath, 'utf-8');
+  return renderFromData(assembleRenderData(opts));
 }

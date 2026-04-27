@@ -1,155 +1,184 @@
-// src/cli.ts — CLI entry point for learning-loop-reporter v0.2.0
-
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import {
-  renderReport,
-  assembleRenderData,
-  type ReflectionEvent,
-  type AssembleOptions,
-} from './render.js';
-import { loadConfig, sendToAllChannels, archiveEvent } from './send.js';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { assembleRenderData, renderReport, type AssembleOptions, type ReflectionEvent } from './render.js';
+import { archiveEvent, loadConfig, sendToAllChannels } from './send.js';
 
 const USAGE = `Usage: learning-loop-reporter <command> [options]
 
 Commands:
-  notify   --event <path>    Send notification for reflection event
-  preview  --event <path>    Preview rendered message without sending
-           --raw             Output raw assembled JSON instead of rendered text
-  health                     Self-check (config, channels, dependencies)
+  notify   --event <path>          Send notification for reflection event
+  preview  --event <path>          Preview rendered message without sending
+           --fixture <name>        Preview built-in fixture from fixtures/
+           --raw                   Output raw assembled JSON instead of rendered text
+  health                           Self-check (config, channels, dependencies)
 `;
+
+export interface CliDeps {
+  stdout: (text: string) => void;
+  stderr: (text: string) => void;
+  exit: (code: number) => never;
+  loadConfig: typeof loadConfig;
+  sendToAllChannels: typeof sendToAllChannels;
+  archiveEvent: typeof archiveEvent;
+  existsSync: typeof existsSync;
+}
+
+const defaultDeps: CliDeps = {
+  stdout: text => process.stdout.write(`${text}\n`),
+  stderr: text => process.stderr.write(`${text}\n`),
+  exit: code => process.exit(code),
+  loadConfig,
+  sendToAllChannels,
+  archiveEvent,
+  existsSync,
+};
+
+function getProjectDir(): string {
+  return dirname(dirname(fileURLToPath(import.meta.url)));
+}
 
 function getConfigPath(): string {
   return join(homedir(), '.openclaw', 'workspace', 'learn', 'reporter-config.json');
 }
 
-function getDefaultPaths(): { candidatesDir: string; dbPath: string } {
+function getDefaultPaths(): { candidatesDir: string } {
   const ws = join(homedir(), '.openclaw', 'workspace');
-  return {
-    candidatesDir: join(ws, 'learn', 'candidates'),
-    dbPath: join(ws, 'learn', 'candidates.db'),
-  };
+  return { candidatesDir: join(ws, 'learn', 'candidates') };
 }
 
-function loadEvent(path: string): ReflectionEvent {
-  if (!existsSync(path)) throw new Error(`Event file not found: ${path}`);
-  return JSON.parse(readFileSync(path, 'utf-8')) as ReflectionEvent;
+function loadJsonFile(path: string): ReflectionEvent {
+  return JSON.parse(readFileSync(path, 'utf8')) as ReflectionEvent;
+}
+
+function loadFixture(name: string): ReflectionEvent {
+  const path = join(getProjectDir(), 'fixtures', `${name}.json`);
+  if (!existsSync(path)) throw new Error(`Fixture not found: ${name}`);
+  return loadJsonFile(path);
 }
 
 function buildAssembleOpts(event: ReflectionEvent): AssembleOptions {
-  const paths = getDefaultPaths();
-  return {
-    event,
-    candidatesDir: paths.candidatesDir,
-    dbPath: paths.dbPath,
-  };
+  const fixtureCandidateData = (event as ReflectionEvent & {
+    __candidate_data?: Record<string, {
+      id: string;
+      domain?: string;
+      confidence: number;
+      status: string;
+      summary?: string;
+      trigger_event_summary?: string;
+      created_at: string;
+    }>;
+    __backlog?: Array<{
+      id: string;
+      domain?: string;
+      confidence: number;
+      status: string;
+      summary?: string;
+      created_at: string;
+    }>;
+  }).__candidate_data;
+  const fixtureBacklog = (event as ReflectionEvent & { __backlog?: AssembleOptions['backlogLoader'] extends () => infer R ? R : never }).__backlog;
+
+  if (fixtureCandidateData || fixtureBacklog) {
+    return {
+      event,
+      candidateLoader: id => fixtureCandidateData?.[id] ?? null,
+      backlogLoader: () => fixtureBacklog ?? [],
+    };
+  }
+
+  return { event, candidatesDir: getDefaultPaths().candidatesDir };
 }
 
-function cmdNotify(eventPath: string): void {
-  const event = loadEvent(eventPath);
+function getOption(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function requireEventOrFixture(args: string[]): ReflectionEvent {
+  const eventPath = getOption(args, '--event');
+  const fixtureName = getOption(args, '--fixture');
+  if (eventPath) return loadJsonFile(eventPath);
+  if (fixtureName) return loadFixture(fixtureName);
+  throw new Error('Missing --event <path> or --fixture <name>');
+}
+
+function cmdNotify(args: string[], deps: CliDeps): void {
+  const eventPath = getOption(args, '--event');
+  if (!eventPath) throw new Error('Usage: learning-loop-reporter notify --event <path>');
+  if (!deps.existsSync(eventPath)) throw new Error(`Event file not found: ${eventPath}`);
+
+  const event = loadJsonFile(eventPath);
   const message = renderReport(buildAssembleOpts(event));
+  const result = deps.sendToAllChannels(deps.loadConfig(getConfigPath()), message);
 
-  const configPath = getConfigPath();
-  const config = loadConfig(configPath);
-
-  const result = sendToAllChannels(config, message);
-  if (result.errors.length > 0) {
-    console.error(`⚠️ Some channels failed: ${result.errors.join('; ')}`);
-  }
   if (result.sent > 0) {
-    archiveEvent(eventPath);
-    console.log(`✅ Sent to ${result.sent} channel(s), event archived.`);
-  } else {
-    console.error('❌ Failed to send to any channel.');
-    process.exit(1);
+    deps.archiveEvent(eventPath);
+    deps.stdout(`✅ Sent to ${result.sent} channel(s), event archived.`);
+    if (result.errors.length > 0) deps.stderr(`⚠️ Some channels failed: ${result.errors.join('; ')}`);
+    return;
   }
+
+  throw new Error(result.errors[0] ?? 'Failed to send to any channel.');
 }
 
-function cmdPreview(eventPath: string, raw: boolean): void {
-  const event = loadEvent(eventPath);
-  const opts = buildAssembleOpts(event);
-
+function cmdPreview(args: string[], deps: CliDeps): void {
+  const raw = args.includes('--raw');
+  const event = requireEventOrFixture(args);
   if (raw) {
-    const data = assembleRenderData(opts);
-    console.log(JSON.stringify(data, null, 2));
-  } else {
-    const message = renderReport(opts);
-    console.log('--- Preview ---');
-    console.log(message);
-    console.log('--- End ---');
+    deps.stdout(JSON.stringify(assembleRenderData(buildAssembleOpts(event)), null, 2));
+    return;
   }
+  deps.stdout(renderReport(buildAssembleOpts(event)).trimEnd());
 }
 
-async function cmdHealth(): Promise<void> {
-  const configPath = getConfigPath();
+async function cmdHealth(deps: CliDeps): Promise<void> {
   let ok = true;
+  const configPath = getConfigPath();
 
-  if (existsSync(configPath)) {
-    console.log(`✅ Config: ${configPath}`);
-    try {
-      const config = loadConfig(configPath);
-      console.log(`   Channels: ${config.channels.length}`);
-      for (const ch of config.channels) {
-        console.log(`   - ${ch.type}: ${ch.target}`);
-      }
-    } catch (e) {
-      console.log(`❌ Config parse error: ${(e as Error).message}`);
-      ok = false;
-    }
+  if (deps.existsSync(configPath)) {
+    deps.stdout(`✅ Config: ${configPath}`);
+    const config = deps.loadConfig(configPath);
+    deps.stdout(`   Channels: ${config.channels.length}`);
   } else {
-    console.log(`❌ Config not found: ${configPath}`);
+    deps.stdout(`❌ Config not found: ${configPath}`);
     ok = false;
   }
 
-  try {
-    const { execSync } = await import('node:child_process');
-    execSync('which openclaw', { stdio: 'pipe' });
-    console.log('✅ openclaw CLI: available');
-  } catch {
-    console.log('❌ openclaw CLI: not found (required for feishu send)');
-    ok = false;
-  }
-
-  try {
-    const paths = getDefaultPaths();
-    console.log(`✅ Candidates dir: ${existsSync(paths.candidatesDir) ? 'exists' : 'missing'}`);
-    console.log(`✅ Candidates DB: ${existsSync(paths.dbPath) ? 'exists' : 'missing'}`);
-  } catch {
-    console.log('⚠️ Could not check candidate paths');
-  }
-
-  process.exit(ok ? 0 : 1);
+  const paths = getDefaultPaths();
+  deps.stdout(`✅ Candidates dir: ${deps.existsSync(paths.candidatesDir) ? 'exists' : 'missing'}`);
+  if (!ok) deps.exit(1);
 }
 
-// --- Main ---
-const args = process.argv.slice(2);
-const command = args[0];
+export async function runCli(argv: string[], deps: Partial<CliDeps> = {}): Promise<void> {
+  const merged = { ...defaultDeps, ...deps } as CliDeps;
+  const [command, ...args] = argv;
 
-switch (command) {
-  case 'notify': {
-    const idx = args.indexOf('--event');
-    if (idx === -1 || !args[idx + 1]) {
-      console.error('Usage: learning-loop-reporter notify --event <path>');
-      process.exit(2);
+  try {
+    switch (command) {
+      case 'notify':
+        cmdNotify(args, merged);
+        return;
+      case 'preview':
+        cmdPreview(args, merged);
+        return;
+      case 'health':
+        await cmdHealth(merged);
+        return;
+      default:
+        merged.stdout(USAGE.trimEnd());
+        merged.exit(command ? 2 : 0);
     }
-    cmdNotify(args[idx + 1]!);
-    break;
+  } catch (error) {
+    merged.stderr((error as Error).message);
+    merged.exit(2);
   }
-  case 'preview': {
-    const idx = args.indexOf('--event');
-    if (idx === -1 || !args[idx + 1]) {
-      console.error('Usage: learning-loop-reporter preview --event <path>');
-      process.exit(2);
-    }
-    const raw = args.includes('--raw');
-    cmdPreview(args[idx + 1]!, raw);
-    break;
-  }
-  case 'health':
-    cmdHealth();
-    break;
-  default:
-    console.log(USAGE);
-    process.exit(command ? 2 : 0);
 }
+
+const invokedPath = process.argv[1] ? new URL(`file://${process.argv[1]}`).href : '';
+if (import.meta.url === invokedPath) {
+  void runCli(process.argv.slice(2));
+}
+
+export { USAGE, getConfigPath, getDefaultPaths, loadFixture, buildAssembleOpts, basename };
