@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { shortId, titleForCandidate } from './domain-titles.js';
+import { titleForCandidate } from './domain-titles.js';
+import { aggregateByState, findStaleBacklog, loadAllCandidates, shortId, type Candidate, type CandidateStateCounts } from './loaders/candidate-loader.js';
 import { renderActionsSection } from './sections/actions.js';
 import { renderCumulativeSection } from './sections/cumulative.js';
 import { renderDroppedSection } from './sections/dropped.js';
@@ -34,33 +35,18 @@ export interface ReflectionEvent {
     reasons_triggered: string[];
     new_candidate_ids?: string[];
   };
-  candidates_summary: {
-    pending: number;
-    reviewing: number;
-    shadow: number;
-    graduated: number;
-    high_confidence: Array<{ id: string; domain: string; confidence: number }>;
+  candidates_summary?: {
+    pending?: number;
+    reviewing?: number;
+    shadow?: number;
+    graduated?: number;
   };
   errors: string[];
 }
 
-export interface CandidateInfo {
-  id: string;
-  domain?: string;
-  confidence: number;
-  status: string;
-  summary?: string;
-  trigger_event_summary?: string;
-  created_at: string;
-}
-
-export interface RenderCandidateCard {
+export interface RenderCandidateCard extends Pick<Candidate, 'id' | 'short_id' | 'problem_category' | 'state' | 'age_days'> {
   title: string;
-  shortId: string;
-  status: string;
-  confidence: number;
-  trigger?: string;
-  note?: string;
+  trigger_summary?: string;
 }
 
 export interface DroppedGroup {
@@ -70,81 +56,38 @@ export interface DroppedGroup {
   items: string[];
 }
 
-export interface HighConfidenceBacklogItem {
-  id: string;
-  shortId: string;
-  confidence: number;
-  ageDays: number;
-}
-
-export interface RenderData {
+export interface ReportData {
   date: string;
-  version: string;
-  eventsCollected: number;
-  candidatesGenerated: number;
-  candidatesDropped: number;
-  durationSeconds: string;
-  newCandidates: RenderCandidateCard[];
-  droppedGroups: DroppedGroup[];
-  counts: {
-    pending: number;
-    reviewing: number;
-    shadow: number;
-    graduated: number;
+  reflection: {
+    events_collected: number;
+    candidates_generated: number;
+    candidates_dropped: number;
+    duration_seconds: number;
+    dropped_summary?: Record<string, number>;
+    dropped_items?: DroppedItem[];
   };
-  backlog: HighConfidenceBacklogItem[];
+  new_candidates: RenderCandidateCard[];
+  candidates_by_state: CandidateStateCounts;
+  total_candidates: number;
+  stale_backlog: Candidate[];
+  dropped_groups: DroppedGroup[];
   errors: string[];
+  version: string;
+  stale_days: number;
 }
 
-export interface AssembleOptions {
-  event: ReflectionEvent;
-  candidatesDir?: string;
-  now?: Date;
-  candidateLoader?: (id: string) => CandidateInfo | null;
-  backlogLoader?: () => CandidateInfo[];
+export interface ReporterConfigRuntime {
+  stale_days?: number;
 }
 
-export function loadCandidateFromDb(candidatesDir: string, candidateId: string): CandidateInfo | null {
-  if (!existsSync(candidatesDir)) return null;
-  const dateDirs = readdirSync(candidatesDir).filter(dir => /^\d{4}-\d{2}-\d{2}$/.test(dir));
-
-  for (const dateDir of dateDirs) {
-    const dirPath = join(candidatesDir, dateDir);
-    const files = readdirSync(dirPath).filter(file => file.endsWith('.md'));
-    for (const file of files) {
-      const fullPath = join(dirPath, file);
-      const content = readFileSync(fullPath, 'utf8');
-      const frontmatter = parseFrontmatter(content);
-      if (!frontmatter || frontmatter.id !== candidateId) continue;
-      return {
-        id: candidateId,
-        domain: frontmatter.problem_category ?? frontmatter.scope ?? 'unknown',
-        confidence: parseFloat(frontmatter.confidence ?? '0.5'),
-        status: frontmatter.state ?? 'pending',
-        summary: frontmatter.summary ?? '(no summary - candidate from older version)',
-        trigger_event_summary: frontmatter.trigger_event_summary,
-        created_at: frontmatter.created_at ?? new Date().toISOString(),
-      };
-    }
+export function loadReporterConfig(workspaceDir: string): ReporterConfigRuntime {
+  const configPath = join(workspaceDir, 'learn', 'reporter-config.json');
+  try {
+    const raw = JSON.parse(readFileSync(configPath, 'utf8')) as ReporterConfigRuntime;
+    return raw ?? {};
+  } catch {
+    return {};
   }
-
-  return null;
-}
-
-function parseFrontmatter(content: string): Record<string, string> | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return null;
-  const result: Record<string, string> = {};
-  for (const line of match[1].split('\n')) {
-    const kv = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
-    if (kv) result[kv[1]] = kv[2];
-  }
-  return result;
-}
-
-export function computeAgeDays(createdAt: string, now: Date = new Date()): number {
-  const created = new Date(createdAt);
-  return Math.floor((now.getTime() - created.getTime()) / (24 * 60 * 60 * 1000));
 }
 
 function droppedReasonLabel(reason: string): string {
@@ -166,98 +109,123 @@ function summarizeDroppedItem(item: DroppedItem): string {
   return item.summary?.trim() || item.reason_detail?.trim() || '(no detail)';
 }
 
-export function assembleRenderData(opts: AssembleOptions): RenderData {
-  const { event } = opts;
-  const now = opts.now ?? new Date();
-  const date = event.timestamp.slice(0, 10);
-  const loadCandidate = opts.candidateLoader ?? ((id: string) => (opts.candidatesDir ? loadCandidateFromDb(opts.candidatesDir, id) : null));
-  const backlogLoader = opts.backlogLoader ?? (() => []);
+function groupDroppedItems(items: DroppedItem[]): DroppedGroup[] {
+  const grouped = new Map<string, string[]>();
+  for (const item of items) {
+    const key = item.reason || 'unknown';
+    const list = grouped.get(key) ?? [];
+    list.push(summarizeDroppedItem(item));
+    grouped.set(key, list);
+  }
 
-  const newCandidates = (event.reflection.new_candidate_ids ?? []).map(id => {
-    const candidate = loadCandidate(id);
-    const fallback: CandidateInfo = candidate ?? {
-      id,
-      domain: 'unknown',
-      confidence: 0.5,
-      status: 'pending',
-      summary: '(no summary)',
-      created_at: now.toISOString(),
-    };
-
-    const title = titleForCandidate({ id: fallback.id, summary: fallback.summary, domain: fallback.domain });
-    const usedSummaryAsTitle = !!fallback.summary?.trim() && title === titleForCandidate({ id: fallback.id, summary: fallback.summary, domain: fallback.domain }) && title === (fallback.summary!.trim().length > 30 ? `${fallback.summary!.trim().slice(0, 30)}…` : fallback.summary!.trim()) && fallback.summary !== '(no summary)' && !fallback.summary?.includes('no summary - candidate from older version');
-    const note = usedSummaryAsTitle ? undefined : (fallback.summary?.trim() || '(no summary)');
-
-    return {
-      title,
-      shortId: shortId(fallback.id),
-      status: fallback.status,
-      confidence: fallback.confidence,
-      trigger: fallback.trigger_event_summary?.trim() || undefined,
-      note,
-    } satisfies RenderCandidateCard;
-  });
-
-  const droppedGroups = Object.entries(groupDroppedItems(event.reflection.dropped_items ?? [])).map(([reason, items]) => ({
+  return [...grouped.entries()].map(([reason, summaries]) => ({
     reason,
     label: droppedReasonLabel(reason),
-    count: items.length,
-    items,
+    count: summaries.length,
+    items: summaries,
   }));
+}
 
-  const backlog = backlogLoader()
-    .filter(item => item.status === 'pending' && item.confidence >= 0.7)
-    .map(item => ({
-      id: item.id,
-      shortId: shortId(item.id),
-      confidence: item.confidence,
-      ageDays: computeAgeDays(item.created_at, now),
-    }))
-    .sort((a, b) => b.ageDays - a.ageDays || b.confidence - a.confidence);
+export function firstSentence(text?: string, maxLength = 60): string | undefined {
+  const trimmed = text?.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return undefined;
+  const sentence = trimmed.split(/(?<=[。！？!?])\s+/)[0] ?? trimmed;
+  if (sentence.length <= maxLength) return sentence;
+  return `${sentence.slice(0, maxLength)}…`;
+}
+
+export function isSameDay(dateIso: string, dayIso: string): boolean {
+  return !!dateIso && dateIso.slice(0, 10) === dayIso;
+}
+
+export interface AssembleOptions {
+  event: ReflectionEvent;
+  workspaceDir?: string;
+  now?: Date;
+  candidates?: Candidate[];
+  staleDays?: number;
+}
+
+export function assembleReportData(opts: AssembleOptions): ReportData {
+  const { event } = opts;
+  const now = opts.now ?? new Date();
+  const workspaceDir = opts.workspaceDir ?? event.workspace;
+  const config = loadReporterConfig(workspaceDir);
+  const staleDays = opts.staleDays ?? config.stale_days ?? 4;
+  const candidates = opts.candidates ?? loadAllCandidates(workspaceDir, now);
+  const date = event.timestamp.slice(0, 10);
+  const newCandidateIds = new Set(event.reflection.new_candidate_ids ?? []);
+
+  const newCandidates = candidates
+    .filter(candidate => newCandidateIds.has(candidate.id) || isSameDay(candidate.created_at, date))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    .map(candidate => ({
+      id: candidate.id,
+      short_id: candidate.short_id,
+      problem_category: candidate.problem_category,
+      state: candidate.state,
+      age_days: candidate.age_days,
+      title: titleForCandidate(candidate),
+      trigger_summary: firstSentence(candidate.trigger_conditions),
+    } satisfies RenderCandidateCard));
+
+  const candidatesByState = aggregateByState(candidates);
+  const staleBacklog = findStaleBacklog(candidates, staleDays);
 
   return {
     date,
-    version: '0.3.0',
-    eventsCollected: event.reflection.events_collected,
-    candidatesGenerated: event.reflection.candidates_generated,
-    candidatesDropped: event.reflection.candidates_dropped,
-    durationSeconds: (event.reflection.duration_ms / 1000).toFixed(1),
-    newCandidates,
-    droppedGroups,
-    counts: {
-      pending: event.candidates_summary.pending,
-      reviewing: event.candidates_summary.reviewing,
-      shadow: event.candidates_summary.shadow,
-      graduated: event.candidates_summary.graduated,
+    reflection: {
+      events_collected: event.reflection.events_collected,
+      candidates_generated: event.reflection.candidates_generated,
+      candidates_dropped: event.reflection.candidates_dropped,
+      duration_seconds: event.reflection.duration_ms / 1000,
+      dropped_summary: event.reflection.dropped_summary,
+      dropped_items: event.reflection.dropped_items,
     },
-    backlog,
+    new_candidates: newCandidates,
+    candidates_by_state: candidatesByState,
+    total_candidates: candidates.length,
+    stale_backlog: staleBacklog,
+    dropped_groups: groupDroppedItems(event.reflection.dropped_items ?? []),
     errors: event.errors,
+    version: '0.4.0',
+    stale_days: staleDays,
   };
 }
 
-function groupDroppedItems(items: DroppedItem[]): Record<string, string[]> {
-  const grouped: Record<string, string[]> = {};
-  for (const item of items) {
-    const key = item.reason || 'unknown';
-    grouped[key] ??= [];
-    grouped[key].push(summarizeDroppedItem(item));
+function renderStaleBacklogSection(data: ReportData): string {
+  const title = `═══ ⏰ 超期未审 (≥${data.stale_days} 天) ═══`;
+  if (data.stale_backlog.length === 0) {
+    return [title, '当前没有超期未审候选。'].join('\n');
   }
-  return grouped;
+
+  return [
+    title,
+    ...data.stale_backlog.map(candidate => [
+      `▸ ${titleForCandidate(candidate)} [${candidate.state} · ${candidate.age_days} 天前]`,
+      candidate.trigger_conditions ? `   触发：${firstSentence(candidate.trigger_conditions)}` : undefined,
+      `   ID: ${shortId(candidate.id)}`,
+    ].filter(Boolean).join('\n')),
+  ].join('\n\n');
 }
 
-function renderErrorsSection(data: RenderData): string {
+function renderErrorsSection(data: ReportData): string {
   if (data.errors.length === 0) return '';
   return ['═══ ❗ 错误 ═══', ...data.errors.map(error => `- ${error}`)].join('\n');
 }
 
-export function renderFromData(data: RenderData): string {
+export function renderFromData(data: ReportData): string {
   const sections = [
     `📚 学习闭环日报｜${data.date}`,
     '',
     renderOverviewSection(data),
     renderNewCandidatesSection(data),
-    renderDroppedSection(data),
+    renderDroppedSection({
+      candidatesDropped: data.reflection.candidates_dropped,
+      droppedGroups: data.dropped_groups,
+    }),
     renderCumulativeSection(data),
+    renderStaleBacklogSection(data),
     renderActionsSection(data),
     renderErrorsSection(data),
     `🤖 by learning-loop-reporter v${data.version}`,
@@ -267,5 +235,5 @@ export function renderFromData(data: RenderData): string {
 }
 
 export function renderReport(opts: AssembleOptions): string {
-  return renderFromData(assembleRenderData(opts));
+  return renderFromData(assembleReportData(opts));
 }

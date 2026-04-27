@@ -1,0 +1,25 @@
+{
+  "event": "reflection-completed",
+  "version": "1.1.0-alpha.2",
+  "timestamp": "2026-04-27T06:21:42.314Z",
+  "runtime": "openclaw",
+  "workspace": "/home/mcdowell/.openclaw/workspace",
+  "reflection": {
+    "from": null,
+    "to": null,
+    "watermark_before": "2026-04-26",
+    "watermark_after": "2026-04-26",
+    "duration_ms": 3506,
+    "events_collected": 1,
+    "candidates_generated": 0,
+    "candidates_dropped": 0,
+    "reasons_triggered": ["manual"]
+  },
+  "candidates_summary": {
+    "pending": 0,
+    "reviewing": 0,
+    "shadow": 0,
+    "graduated": 0
+  },
+  "errors": []
+}

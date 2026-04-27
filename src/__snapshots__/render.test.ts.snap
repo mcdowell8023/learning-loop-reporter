@@ -6,25 +6,24 @@ exports[`renderFromData snapshots > renders compatibility-old fixture 1`] = `
 ═══ 总览 ═══
 5 events · 1 新候选 · 1 被丢弃 · 耗时 2.1s
 
-═══ 🆕 新候选 ═══
-
-▸ 文档同步失败 [pending · conf 0.7]
-   说明：(no summary - candidate from older version)
-   ID: 11111111
+═══ 🆕 今日新增候选 ═══
+今日没有新增候选。
 
 ═══ ⚠️ 被丢弃 (1) ═══
 🚫 格式错误 (1)
    • missing required field summary
 
-═══ 📊 累计 ═══
-pending 1 · reviewing 0 · shadow 0 · graduated 0
+═══ 📊 候选库总览 (共 6) ═══
+pending 6 · reviewing 0 · shadow 0 · graduated 0
+
+═══ ⏰ 超期未审 (≥4 天) ═══
+当前没有超期未审候选。
 
 ═══ 🎯 现在该做什么 ═══
-1. review 新候选（ID: 11111111）
-2. 处理超期未审：openclaw-learn review list --status pending --min-conf 0.7
-3. 详情：openclaw-learn review show <ID>
+1. 处理超期未审：openclaw-learn review list --status pending
+2. 详情：openclaw-learn review show <ID>
 
-🤖 by learning-loop-reporter v0.3.0
+🤖 by learning-loop-reporter v0.4.0
 "
 `;
 
@@ -34,20 +33,23 @@ exports[`renderFromData snapshots > renders empty fixture 1`] = `
 ═══ 总览 ═══
 1 events · 0 新候选 · 0 被丢弃 · 耗时 3.5s
 
-═══ 🆕 新候选 ═══
-今天没有新候选。
+═══ 🆕 今日新增候选 ═══
+今日没有新增候选。
 
 ═══ ⚠️ 被丢弃 (0) ═══
-今天没有被丢弃的候选。
+今日没有被丢弃的候选。
 
-═══ 📊 累计 ═══
-pending 0 · reviewing 0 · shadow 0 · graduated 0
+═══ 📊 候选库总览 (共 6) ═══
+pending 6 · reviewing 0 · shadow 0 · graduated 0
+
+═══ ⏰ 超期未审 (≥4 天) ═══
+当前没有超期未审候选。
 
 ═══ 🎯 现在该做什么 ═══
-1. 处理超期未审：openclaw-learn review list --status pending --min-conf 0.7
+1. 处理超期未审：openclaw-learn review list --status pending
 2. 详情：openclaw-learn review show <ID>
 
-🤖 by learning-loop-reporter v0.3.0
+🤖 by learning-loop-reporter v0.4.0
 "
 `;
 
@@ -57,60 +59,52 @@ exports[`renderFromData snapshots > renders errors-only fixture 1`] = `
 ═══ 总览 ═══
 0 events · 0 新候选 · 0 被丢弃 · 耗时 0.9s
 
-═══ 🆕 新候选 ═══
-今天没有新候选。
+═══ 🆕 今日新增候选 ═══
+今日没有新增候选。
 
 ═══ ⚠️ 被丢弃 (0) ═══
-今天没有被丢弃的候选。
+今日没有被丢弃的候选。
 
-═══ 📊 累计 ═══
-pending 0 · reviewing 0 · shadow 0 · graduated 0
+═══ 📊 候选库总览 (共 6) ═══
+pending 6 · reviewing 0 · shadow 0 · graduated 0
+
+═══ ⏰ 超期未审 (≥4 天) ═══
+当前没有超期未审候选。
 
 ═══ 🎯 现在该做什么 ═══
-1. 处理超期未审：openclaw-learn review list --status pending --min-conf 0.7
+1. 处理超期未审：openclaw-learn review list --status pending
 2. 详情：openclaw-learn review show <ID>
 
 ═══ ❗ 错误 ═══
 - LLM timeout after 30s
 - candidate loader unavailable
 
-🤖 by learning-loop-reporter v0.3.0
+🤖 by learning-loop-reporter v0.4.0
 "
 `;
 
-exports[`renderFromData snapshots > renders rich fixture 1`] = `
+exports[`renderFromData snapshots > renders rich-real fixture 1`] = `
 "📚 学习闭环日报｜2026-04-27
 
 ═══ 总览 ═══
-22 events · 2 新候选 · 3 被丢弃 · 耗时 5.2s
+1 events · 0 新候选 · 0 被丢弃 · 耗时 3.5s
 
-═══ 🆕 新候选 ═══
+═══ 🆕 今日新增候选 ═══
+今日没有新增候选。
 
-▸ 模型路由故障识别 [pending · conf 0.5]
-   触发：2026-04-26 pollinations API 故障诊断
-   说明：(no summary)
-   ID: 68b21d20
+═══ ⚠️ 被丢弃 (0) ═══
+今日没有被丢弃的候选。
 
-▸ 未分类候选 [pending · conf 0.5]
-   说明：(no summary)
-   ID: f50ea43f
-
-═══ ⚠️ 被丢弃 (3) ═══
-🔁 重复 (2)
-   • 工具链报告测试通过但实际未在生产环境验证
-   • 发版前必须跑完整测试矩阵
-
-📉 信号太弱 (1)
-   • 日志格式优化建议
-
-═══ 📊 累计 ═══
+═══ 📊 候选库总览 (共 6) ═══
 pending 6 · reviewing 0 · shadow 0 · graduated 0
 
-═══ 🎯 现在该做什么 ═══
-1. review 新候选（ID: 68b21d20 / f50ea43f）
-2. 处理超期未审：openclaw-learn review list --status pending --min-conf 0.7
-3. 详情：openclaw-learn review show <ID>
+═══ ⏰ 超期未审 (≥4 天) ═══
+当前没有超期未审候选。
 
-🤖 by learning-loop-reporter v0.3.0
+═══ 🎯 现在该做什么 ═══
+1. 处理超期未审：openclaw-learn review list --status pending
+2. 详情：openclaw-learn review show <ID>
+
+🤖 by learning-loop-reporter v0.4.0
 "
 `;

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assembleRenderData, renderReport, type AssembleOptions, type ReflectionEvent } from './render.js';
+import { assembleReportData, renderReport, type AssembleOptions, type ReflectionEvent } from './render.js';
 import { archiveEvent, loadConfig, sendToAllChannels } from './send.js';
 
 const USAGE = `Usage: learning-loop-reporter <command> [options]
@@ -43,9 +43,13 @@ function getConfigPath(): string {
   return join(homedir(), '.openclaw', 'workspace', 'learn', 'reporter-config.json');
 }
 
-function getDefaultPaths(): { candidatesDir: string } {
-  const ws = join(homedir(), '.openclaw', 'workspace');
-  return { candidatesDir: join(ws, 'learn', 'candidates') };
+function getWorkspaceDir(): string {
+  return join(homedir(), '.openclaw', 'workspace');
+}
+
+function getDefaultPaths(): { workspaceDir: string; candidatesDir: string } {
+  const workspaceDir = getWorkspaceDir();
+  return { workspaceDir, candidatesDir: join(workspaceDir, 'learn', 'candidates') };
 }
 
 function loadJsonFile(path: string): ReflectionEvent {
@@ -59,36 +63,10 @@ function loadFixture(name: string): ReflectionEvent {
 }
 
 function buildAssembleOpts(event: ReflectionEvent): AssembleOptions {
-  const fixtureCandidateData = (event as ReflectionEvent & {
-    __candidate_data?: Record<string, {
-      id: string;
-      domain?: string;
-      confidence: number;
-      status: string;
-      summary?: string;
-      trigger_event_summary?: string;
-      created_at: string;
-    }>;
-    __backlog?: Array<{
-      id: string;
-      domain?: string;
-      confidence: number;
-      status: string;
-      summary?: string;
-      created_at: string;
-    }>;
-  }).__candidate_data;
-  const fixtureBacklog = (event as ReflectionEvent & { __backlog?: AssembleOptions['backlogLoader'] extends () => infer R ? R : never }).__backlog;
-
-  if (fixtureCandidateData || fixtureBacklog) {
-    return {
-      event,
-      candidateLoader: id => fixtureCandidateData?.[id] ?? null,
-      backlogLoader: () => fixtureBacklog ?? [],
-    };
-  }
-
-  return { event, candidatesDir: getDefaultPaths().candidatesDir };
+  return {
+    event,
+    workspaceDir: event.workspace || getWorkspaceDir(),
+  };
 }
 
 function getOption(args: string[], flag: string): string | undefined {
@@ -127,7 +105,7 @@ function cmdPreview(args: string[], deps: CliDeps): void {
   const raw = args.includes('--raw');
   const event = requireEventOrFixture(args);
   if (raw) {
-    deps.stdout(JSON.stringify(assembleRenderData(buildAssembleOpts(event)), null, 2));
+    deps.stdout(JSON.stringify(assembleReportData(buildAssembleOpts(event)), null, 2));
     return;
   }
   deps.stdout(renderReport(buildAssembleOpts(event)).trimEnd());

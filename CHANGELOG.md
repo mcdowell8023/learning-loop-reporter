@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.4.0] - 2026-04-27 - Real candidate-store compatibility
+
+### Added
+- `src/loaders/candidate-loader.ts`：按真实目录结构加载 `learn/candidates/YYYY-MM-DD/*.md`
+- `gray-matter` 依赖：解析 markdown frontmatter
+- `age_days` / `short_id` / `filepath` 等派生字段
+- `trigger_conditions` / `recommended_action` 正文段落抽取
+- `fixtures/rich-real.json`：面向真实 6 候选库的 fixture
+- `src/loaders/candidate-loader.test.ts`：11 个 loader 场景回归
+
+### Changed
+- render 数据模型从旧版 `confidence/domain/summary` 假设切换到真实 `problem_category/state/created_at` 结构
+- 候选标题改为 `problem_category -> 中文标题 -> humanized title`
+- backlog 从“高 confidence 候选”改为“超期未审候选”
+- 新候选卡片展示从 `conf N` 改为 `N 天前`
+- 新增 `⏰ 超期未审 (≥N 天)` 段
+- `reporter-config.json` 支持 `stale_days`
+- CLI `preview --raw` 输出新版 `ReportData`
+- README 示例与说明同步到 v0.4.0
+- 测试基线更新为 48 case
+
+### Removed
+- 删除 reporter 内部对 `confidence` 的硬编码 fallback 语义
+- 删除动作区里 `--min-conf 0.7` 的旧命令假设
+
+### Breaking
+- `titleForCandidate()` 不再依赖 `summary`
+- `RenderData` 重构为 `ReportData`
+- 报表不再读取/渲染 `confidence`
+- backlog 语义变更为“超期未审”
+
 ## [0.3.0] - 2026-04-27 - Readability overhaul
 
 ### Added
