@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/learning-loop-reporter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Feishu notification reporter for @openclaw/self-learning-loop reflection events",
   "type": "module",
   "main": "dist/cli.js",
