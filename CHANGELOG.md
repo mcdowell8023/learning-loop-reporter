@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.0] - 2026-04-27 - Read daily report markdown instead of assembling data
+
+### Added
+- `src/loaders/daily-report-loader.ts`：直接读取 `~/.openclaw/workspace/learn/reports/YYYY-MM-DD-daily.md`
+- `preview [--date YYYY-MM-DD] [--report <path>]`：本地直接预览飞书文本
+- `notify [--date YYYY-MM-DD] [--report <path>]`：按日期或指定 markdown 推送
+- 4 份新的 markdown fixtures：`sample-daily-report.md` / `empty-day.md` / `with-stale.md` / `with-dropped.md`
+- 35 个测试用例，覆盖 loader / render / CLI / send，全程 mock 发送
+
+### Changed
+- reporter 从“自己组装候选数据”切换为“读取 self-learning-loop daily report markdown 再适配飞书消息”
+- render 只保留飞书适配职责：保留标题层级、移除 Run 历史、压缩候选库表格、超长文本 30k 截断
+- `health` 自检从 candidates 目录改为 daily reports 目录
+- 现在 reporter 是 self-learning-loop 的飞书通道，跨 runtime 更友好
+
+### Removed
+- 删除 `candidate-loader` 及相关测试
+- 删除 `src/sections/*` 的程序化组装逻辑
+- 删除旧的 `--event` / `--fixture` / `--raw` 工作流（v0.5.0 起不再支持）
+
+### Breaking
+- **Breaking Change**：数据源改为 self-learning-loop ≥ `v1.1.0-alpha.5` 产出的 daily report markdown
+- CLI 参数由 `--event` 切换为 `--date` / `--report`
+- reporter 不再直接读取 `learn/candidates/` 目录
+
 ## [0.4.0] - 2026-04-27 - Real candidate-store compatibility
 
 ### Added
@@ -24,64 +49,3 @@
 ### Removed
 - 删除 reporter 内部对 `confidence` 的硬编码 fallback 语义
 - 删除动作区里 `--min-conf 0.7` 的旧命令假设
-
-### Breaking
-- `titleForCandidate()` 不再依赖 `summary`
-- `RenderData` 重构为 `ReportData`
-- 报表不再读取/渲染 `confidence`
-- backlog 语义变更为“超期未审”
-
-## [0.3.0] - 2026-04-27 - Readability overhaul
-
-### Added
-- `src/domain-titles.ts`：domain → 中文标题映射、`titleForCandidate()`、`shortId()`
-- `src/sections/` 程序化 section 渲染：overview / new-candidates / dropped / cumulative / actions
-- `fixtures/rich.json` / `empty.json` / `errors-only.json` / `compatibility-old.json`
-- `preview --fixture <name>`：开发期直接预览内置样例
-- `preview --raw`：输出组装后的 JSON 结构供排查
-- 41 个测试用例，覆盖标题策略、section、render snapshot、CLI 和发送逻辑
-
-### Changed
-- 新候选展示改为 3~4 行紧凑卡片：标题 / 触发 / 说明 / 短 ID
-- 候选标题优先级改为：summary → 中文 domain → 原始 domain → 短 ID
-- dropped 段从“聚合 + 前 3 条”双层结构改为单层 emoji 分组
-- 重复命令从每条候选中移除，统一收口到「现在该做什么」段
-- 每段统一使用 `═══ {title} ═══` 分隔，适配飞书等宽阅读
-- README 示例升级为 v0.3.0 新版版式
-- `cli.ts` 改为可测试入口 `runCli()`
-
-### Removed
-- 删除 `templates/daily-report.tmpl`，彻底弃用模板字符串渲染
-
-## [0.2.0] - 2026-04-27 - Three-section daily report
-
-### Added
-- **三段式日报**：指标（📊）+ 内容（🆕/⚠️）+ 行动（🔥/📁）
-- **候选 summary 展示**：每条新增候选显示 1-2 句人话总结
-- **trigger_event 展示**：显示触发候选的事件摘要
-- **dropped 候选详情**：按原因聚合 + 前 3 条具体内容
-- **高分待审 backlog**：≥ 0.7 置信度 pending 候选，超 4 天标 ⚠️
-- **age_label 计算**：今日新增 / N 天未审 / ⚠️ N 天未审
-- `preview --raw` 输出原始 JSON 数据
-- 候选数据从 SQLite DB + markdown frontmatter 双路加载
-- 兼容 v1.0 事件（无 dropped_summary/dropped_items/new_candidate_ids）
-- render.test.ts 13 case + send.test.ts 4 case
-
-### Changed
-- render.ts 完全重写：从 mustache-lite 模板引擎改为程序化渲染
-- cli.ts 适配新 render API
-- 模板文件保留为参考，实际渲染由 renderFromData() 驱动
-
-### Breaking
-- `renderTemplate()` 函数移除，改用 `renderReport()` / `renderFromData()`
-
-## [0.1.0] - 2026-04-27 - Initial release
-
-### Added
-- CLI: `notify`, `preview`, `health` 三个命令
-- Mustache-lite 模板渲染引擎
-- 飞书推送（通过 `openclaw message send`）
-- 事件归档（推送成功后自动 mv 到 `events/processed/`）
-- 默认日报模板 `templates/daily-report.tmpl`
-- `scripts/setup.sh` 一键安装
-- 完整测试覆盖（render 模块）

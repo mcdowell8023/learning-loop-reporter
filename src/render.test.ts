@@ -2,98 +2,86 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { assembleReportData, firstSentence, isSameDay, renderFromData, type ReflectionEvent } from './render.js';
+import { loadDailyReportFromPath } from './loaders/daily-report-loader.js';
+import { renderForFeishu } from './render.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const loadFixture = (name: string) => JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', `${name}.json`), 'utf8')) as ReflectionEvent;
-const emptyFixture = loadFixture('empty');
-const richRealFixture = loadFixture('rich-real');
-const errorsOnlyFixture = loadFixture('errors-only');
-const compatibilityOldFixture = loadFixture('compatibility-old');
+const fixturesDir = join(__dirname, '..', 'fixtures');
 
-function loadRealCandidates() {
-  const workspaceDir = '/home/mcdowell/.openclaw/workspace';
-  return assembleReportData({
-    event: richRealFixture,
-    workspaceDir,
-    now: new Date('2026-04-27T14:00:00+08:00'),
-  });
+function loadFixture(name: string) {
+  const filepath = join(fixturesDir, `${name}.md`);
+  const report = loadDailyReportFromPath(filepath);
+  if (!report) throw new Error(`Fixture not found: ${name}`);
+  return report;
 }
 
-describe('helpers', () => {
-  it('compute first sentence with truncation', () => {
-    expect(firstSentence('这是一段很长很长的话，用来验证首句截断是否会在超过六十个字符时追加省略号而不是原样输出。后面还有第二句。', 20)).toBe('这是一段很长很长的话，用来验证首句截断是…');
+describe('renderForFeishu', () => {
+  it('renders sample report snapshot', () => {
+    expect(renderForFeishu(loadFixture('sample-daily-report'))).toMatchSnapshot();
   });
 
-  it('isSameDay matches by date prefix', () => {
-    expect(isSameDay('2026-04-27T10:00:00.000Z', '2026-04-27')).toBe(true);
-    expect(isSameDay('2026-04-26T23:59:59.000Z', '2026-04-27')).toBe(false);
-  });
-});
-
-describe('assembleReportData', () => {
-  it('assembles real candidate corpus', () => {
-    const data = loadRealCandidates();
-    expect(data.total_candidates).toBe(6);
-    expect(data.candidates_by_state.pending).toBe(6);
-    expect(data.new_candidates).toHaveLength(0);
-    expect(data.stale_backlog).toHaveLength(0);
+  it('renders empty day snapshot', () => {
+    expect(renderForFeishu(loadFixture('empty-day'))).toMatchSnapshot();
   });
 
-  it('finds same-day candidates as new candidates', () => {
-    const event = loadFixture('rich');
-    const data = assembleReportData({ event, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-26T23:30:00.000Z') });
-    expect(data.new_candidates.length).toBeGreaterThanOrEqual(1);
+  it('renders stale day snapshot', () => {
+    expect(renderForFeishu(loadFixture('with-stale'))).toMatchSnapshot();
   });
 
-  it('handles empty fixture', () => {
-    const data = assembleReportData({ event: emptyFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') });
-    expect(data.reflection.candidates_generated).toBe(0);
-    expect(data.errors).toHaveLength(0);
+  it('renders dropped day snapshot', () => {
+    expect(renderForFeishu(loadFixture('with-dropped'))).toMatchSnapshot();
   });
 
-  it('handles errors-only fixture', () => {
-    const data = assembleReportData({ event: errorsOnlyFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') });
-    expect(data.errors).toHaveLength(2);
-    expect(data.reflection.candidates_generated).toBe(0);
+  it('keeps title and quote prelude', () => {
+    const output = renderForFeishu(loadFixture('sample-daily-report'));
+    expect(output).toContain('# 学习闭环日报 · 2026-04-27');
+    expect(output).toContain('> Reflect: events=3002');
   });
 
-  it('handles compatibility-old fixture with real store counts', () => {
-    const data = assembleReportData({ event: compatibilityOldFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') });
-    expect(data.total_candidates).toBe(6);
-    expect(data.candidates_by_state.pending).toBe(6);
-  });
-});
-
-describe('renderFromData snapshots', () => {
-  it('renders rich-real fixture', () => {
-    expect(renderFromData(loadRealCandidates())).toMatchSnapshot();
+  it('includes required sections when present', () => {
+    const output = renderForFeishu(loadFixture('sample-daily-report'));
+    expect(output).toContain('## 📊 总览');
+    expect(output).toContain('## 🆕 今日新增候选');
+    expect(output).toContain('## ⏰ 超期未审（pending ≥ 4 天）');
+    expect(output).toContain('## 🎯 行动建议');
   });
 
-  it('renders empty fixture', () => {
-    expect(renderFromData(assembleReportData({ event: emptyFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') }))).toMatchSnapshot();
+  it('replaces snapshot table with summary sentence', () => {
+    const output = renderForFeishu(loadFixture('sample-daily-report'));
+    expect(output).toContain('## 📚 候选库快照');
+    expect(output).toContain('候选库共 14 条（pending 14）。表格已省略，查看完整报告。');
+    expect(output).not.toContain('| ID | 标题 | 状态 | 创建于 | 龄期 |');
   });
 
-  it('renders errors-only fixture', () => {
-    expect(renderFromData(assembleReportData({ event: errorsOnlyFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') }))).toMatchSnapshot();
+  it('drops Run history sections', () => {
+    const output = renderForFeishu(loadFixture('sample-daily-report'));
+    expect(output).not.toContain('## Run #1');
+    expect(output).not.toContain('events_collected: 2947');
   });
 
-  it('renders compatibility-old fixture', () => {
-    expect(renderFromData(assembleReportData({ event: compatibilityOldFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') }))).toMatchSnapshot();
+  it('keeps dropped section when present', () => {
+    const output = renderForFeishu(loadFixture('with-dropped'));
+    expect(output).toContain('## ⚠️ 被丢弃的候选');
+    expect(output).toContain('duplicate');
   });
 
-  it('includes stale backlog section title', () => {
-    const output = renderFromData(loadRealCandidates());
-    expect(output).toContain('═══ ⏰ 超期未审 (≥4 天) ═══');
+  it('keeps stale section when present', () => {
+    const output = renderForFeishu(loadFixture('with-stale'));
+    expect(output).toContain('## ⏰ 超期未审（pending ≥ 4 天）');
+    expect(output).toContain('超期 2 条');
   });
 
-  it('always includes details action', () => {
-    const output = renderFromData(assembleReportData({ event: emptyFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') }));
-    expect(output).toContain('详情：openclaw-learn review show <ID>');
+  it('always appends full report path', () => {
+    const report = loadFixture('sample-daily-report');
+    const output = renderForFeishu(report);
+    expect(output.trimEnd().endsWith(`📁 完整报告：${report.filepath}`)).toBe(true);
   });
 
-  it('shows error section only when errors exist', () => {
-    expect(renderFromData(assembleReportData({ event: errorsOnlyFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') }))).toContain('═══ ❗ 错误 ═══');
-    expect(renderFromData(assembleReportData({ event: emptyFixture, workspaceDir: '/home/mcdowell/.openclaw/workspace', now: new Date('2026-04-27T14:00:00+08:00') }))).not.toContain('═══ ❗ 错误 ═══');
+  it('truncates overlong messages to 30k', () => {
+    const report = loadFixture('sample-daily-report');
+    report.body = `# 学习闭环日报 · 2026-04-27\n\n> 生成时间：2026-04-27T08:42:41.404Z\n\n## 🆕 今日新增候选\n\n${'非常长的内容 '.repeat(10000)}\n\n## 🎯 行动建议\n\n1. done`;
+    const output = renderForFeishu(report);
+    expect(output.length).toBeLessThanOrEqual(30000);
+    expect(output).toContain('已截断');
   });
 });

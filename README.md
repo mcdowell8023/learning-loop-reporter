@@ -1,34 +1,33 @@
 # learning-loop-reporter
 
-> 自学习闭环日报推送 — self-learning-loop 的 reporter skill
+> self-learning-loop 的飞书通道适配器
 
-## 是什么
+从 **v0.5.0** 开始，`learning-loop-reporter` 不再自己扫描候选库、组装日报数据；它只做一件事：
 
-`learning-loop-reporter` 是 [self-learning-loop](https://github.com/mcdowell8023/self-learning-loop) 的配套 skill，负责在每日反思完成后，将结果摘要推送到飞书（或其他渠道）。
+**读取 `self-learning-loop` 生成的 daily report markdown，然后转成适合飞书发送的纯文本消息。**
 
-**v0.4.0 的重点不是版式，而是修正数据源假设。**
-
-v0.3.0 把候选当成 `.json + confidence` 去读，面对真实的 `markdown + YAML frontmatter` 候选库会直接读空。v0.4.0 已改为按真实存储结构读取：
-
-```text
-~/.openclaw/workspace/learn/
-├── candidates/
-│   ├── 2026-04-25/*.md
-│   └── 2026-04-26/*.md
-├── candidates.db
-├── events/
-└── reporter-config.json
-```
-
-## 架构关系
+## 架构
 
 ```text
 self-learning-loop reflect
-    ↓ 写 events/reflection-completed.json
-    ↓ 触发钩子：检查 reporter skill 是否存在
-        ├─ 在 → 调用 learning-loop-reporter notify
-        └─ 不在 → 静默跳过（不影响 reflect 主流程）
+  ↓
+~/.openclaw/workspace/learn/reports/YYYY-MM-DD-daily.md
+  ↓
+learning-loop-reporter preview / notify
+  ↓
+stdout / Feishu
 ```
+
+这意味着：
+- reporter 只是一个 **通道层**
+- 数据真相源是 `learn/reports/*.md`
+- 不安装 reporter，你也可以直接 `cat` 报告文件阅读
+- 对 opencode / claude-code 用户尤其友好：**不需要装 reporter 也能消费日报**
+
+## 依赖
+
+- self-learning-loop **≥ v1.1.0-alpha.5**
+- openclaw CLI（仅 `notify` 需要，用于发飞书）
 
 ## 安装
 
@@ -36,12 +35,13 @@ self-learning-loop reflect
 git clone https://github.com/mcdowell8023/learning-loop-reporter.git
 cd learning-loop-reporter
 npm install
+npm run build
 bash scripts/setup.sh
 ```
 
 安装后：
+- `~/.local/bin/learning-loop-reporter` — CLI
 - `~/.openclaw/workspace/skills/learning-loop-reporter/SKILL.md` — Skill 定义
-- `~/.local/bin/learning-loop-reporter` — CLI 命令
 - `~/.openclaw/workspace/learn/reporter-config.json` — 推送配置
 
 ## 配置
@@ -51,87 +51,99 @@ bash scripts/setup.sh
 ```json
 {
   "channels": [
-    { "type": "feishu", "target": "ou_你的open_id" }
-  ],
-  "stale_days": 4
+    { "type": "feishu", "target": "ou_your_open_id" }
+  ]
 }
 ```
 
-- `channels`：消息投递目标
-- `stale_days`：多少天以上算“超期未审”，默认 4
+## CLI
 
-## 使用
+### 预览
 
 ```bash
-# 推送通知（通常由 self-learning-loop 自动调用）
-learning-loop-reporter notify --event ~/.openclaw/workspace/learn/events/reflection-completed.json
+# 默认读取今天（Asia/Shanghai）对应的日报
+learning-loop-reporter preview
 
-# 预览不发送
-learning-loop-reporter preview --event <path>
+# 指定日期
+learning-loop-reporter preview --date 2026-04-27
 
-# 用内置 fixture 开发自测
-learning-loop-reporter preview --fixture rich-real
-learning-loop-reporter preview --fixture empty
-learning-loop-reporter preview --fixture errors-only
-learning-loop-reporter preview --fixture compatibility-old
-learning-loop-reporter preview --fixture rich-real --raw
+# 指定任意 markdown 报告路径
+learning-loop-reporter preview --report ~/.openclaw/workspace/learn/reports/2026-04-27-daily.md
+```
 
-# 自检
+### 发送
+
+```bash
+# 默认发今天日报
+learning-loop-reporter notify
+
+# 指定日期
+learning-loop-reporter notify --date 2026-04-27
+
+# 指定任意 markdown 报告路径
+learning-loop-reporter notify --report ~/.openclaw/workspace/learn/reports/2026-04-27-daily.md
+```
+
+### 自检
+
+```bash
 learning-loop-reporter health
 ```
 
-## v0.4.0 输出示例
+## Deprecated / Breaking Change
 
-```text
-📚 学习闭环日报｜2026-04-27
+v0.5.0 是 **Breaking Change**：
 
-═══ 总览 ═══
-1 events · 0 新候选 · 0 被丢弃 · 耗时 3.5s
+- `--event` 不再支持
+- `--fixture` 不再支持
+- `--raw` 不再支持
+- 数据源从 `learn/candidates/` 改为 `learn/reports/*.md`
 
-═══ 🆕 今日新增候选 ═══
-今日没有新增候选。
+如果你之前在脚本里这样用：
 
-═══ ⚠️ 被丢弃 (0) ═══
-今日没有被丢弃的候选。
-
-═══ 📊 候选库总览 (共 6) ═══
-pending 6 · reviewing 0 · shadow 0 · graduated 0
-
-═══ ⏰ 超期未审 (≥4 天) ═══
-当前没有超期未审候选。
-
-═══ 🎯 现在该做什么 ═══
-1. 处理超期未审：openclaw-learn review list --status pending
-2. 详情：openclaw-learn review show <ID>
-
-🤖 by learning-loop-reporter v0.4.0
+```bash
+learning-loop-reporter notify --event ~/.openclaw/workspace/learn/events/reflection-completed.json
 ```
 
-## Breaking Changes（从 v0.3.0 升级要知道）
+现在请改成：
 
-1. **不再读取/显示 `confidence`**
-2. **标题改为基于 `problem_category`**
-3. **backlog 从“高 confidence”改为“超期未审”**
-4. **触发摘要来自 markdown 正文 `## Trigger Conditions`**
+```bash
+learning-loop-reporter notify --date 2026-04-27
+# 或
+learning-loop-reporter notify --report ~/.openclaw/workspace/learn/reports/2026-04-27-daily.md
+```
+
+## 输出策略
+
+飞书适配层会做这些事：
+- 保留 markdown 标题层级
+- 保留 emoji
+- 跳过 `Run #N` 历史段
+- 把候选库快照表格压成一句摘要
+- 超过 30k 字符自动截断，并附完整报告路径
 
 ## 开发
 
 ```bash
-npm install
 npm test
 npm run build
-
-# 开发期默认走 stdout，不真发飞书
-learning-loop-reporter preview --fixture rich-real
-learning-loop-reporter preview --fixture empty
-learning-loop-reporter preview --fixture errors-only
-learning-loop-reporter preview --fixture compatibility-old
+npm run verify
 ```
 
-## 卸载
+Fixtures：
+- `fixtures/sample-daily-report.md`
+- `fixtures/empty-day.md`
+- `fixtures/with-stale.md`
+- `fixtures/with-dropped.md`
+
+## 不装 reporter 也能看
+
+如果你只是想看日报，不需要发飞书，直接：
 
 ```bash
-rm -rf ~/.openclaw/workspace/skills/learning-loop-reporter
-rm ~/.local/bin/learning-loop-reporter
-# 保留配置：~/.openclaw/workspace/learn/reporter-config.json
+cat ~/.openclaw/workspace/learn/reports/2026-04-27-daily.md
 ```
+
+这也是 v0.5.0 的核心定位：
+
+> **reporter 是通道，不是数据源。**

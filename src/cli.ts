@@ -1,72 +1,55 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { assembleReportData, renderReport, type AssembleOptions, type ReflectionEvent } from './render.js';
-import { archiveEvent, loadConfig, sendToAllChannels } from './send.js';
+import { join } from 'node:path';
+import { loadDailyReport, loadDailyReportFromPath, loadLatestDailyReport, type DailyReport } from './loaders/daily-report-loader.js';
+import { renderForFeishu } from './render.js';
+import { loadConfig, sendToAllChannels } from './send.js';
 
 const USAGE = `Usage: learning-loop-reporter <command> [options]
 
 Commands:
-  notify   --event <path>          Send notification for reflection event
-  preview  --event <path>          Preview rendered message without sending
-           --fixture <name>        Preview built-in fixture from fixtures/
-           --raw                   Output raw assembled JSON instead of rendered text
-  health                           Self-check (config, channels, dependencies)
+  notify   [--date YYYY-MM-DD] [--report <path>]   Send rendered daily report
+  preview  [--date YYYY-MM-DD] [--report <path>]   Print rendered message to stdout
+  health                                         Self-check (config + reports)
+
+Notes:
+  - Default date is today in Asia/Shanghai.
+  - --report has priority over --date.
+  - Deprecated: --event, --fixture, --raw
 `;
 
 export interface CliDeps {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
   exit: (code: number) => never;
+  existsSync: typeof existsSync;
   loadConfig: typeof loadConfig;
   sendToAllChannels: typeof sendToAllChannels;
-  archiveEvent: typeof archiveEvent;
-  existsSync: typeof existsSync;
+  loadDailyReport: typeof loadDailyReport;
+  loadDailyReportFromPath: typeof loadDailyReportFromPath;
+  loadLatestDailyReport: typeof loadLatestDailyReport;
+  now: () => Date;
 }
 
 const defaultDeps: CliDeps = {
   stdout: text => process.stdout.write(`${text}\n`),
   stderr: text => process.stderr.write(`${text}\n`),
   exit: code => process.exit(code),
+  existsSync,
   loadConfig,
   sendToAllChannels,
-  archiveEvent,
-  existsSync,
+  loadDailyReport,
+  loadDailyReportFromPath,
+  loadLatestDailyReport,
+  now: () => new Date(),
 };
 
-function getProjectDir(): string {
-  return dirname(dirname(fileURLToPath(import.meta.url)));
-}
-
-function getConfigPath(): string {
-  return join(homedir(), '.openclaw', 'workspace', 'learn', 'reporter-config.json');
-}
-
-function getWorkspaceDir(): string {
+export function getWorkspaceDir(): string {
   return join(homedir(), '.openclaw', 'workspace');
 }
 
-function getDefaultPaths(): { workspaceDir: string; candidatesDir: string } {
-  const workspaceDir = getWorkspaceDir();
-  return { workspaceDir, candidatesDir: join(workspaceDir, 'learn', 'candidates') };
-}
-
-function loadJsonFile(path: string): ReflectionEvent {
-  return JSON.parse(readFileSync(path, 'utf8')) as ReflectionEvent;
-}
-
-function loadFixture(name: string): ReflectionEvent {
-  const path = join(getProjectDir(), 'fixtures', `${name}.json`);
-  if (!existsSync(path)) throw new Error(`Fixture not found: ${name}`);
-  return loadJsonFile(path);
-}
-
-function buildAssembleOpts(event: ReflectionEvent): AssembleOptions {
-  return {
-    event,
-    workspaceDir: event.workspace || getWorkspaceDir(),
-  };
+export function getConfigPath(): string {
+  return join(getWorkspaceDir(), 'learn', 'reporter-config.json');
 }
 
 function getOption(args: string[], flag: string): string | undefined {
@@ -74,58 +57,95 @@ function getOption(args: string[], flag: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
-function requireEventOrFixture(args: string[]): ReflectionEvent {
-  const eventPath = getOption(args, '--event');
-  const fixtureName = getOption(args, '--fixture');
-  if (eventPath) return loadJsonFile(eventPath);
-  if (fixtureName) return loadFixture(fixtureName);
-  throw new Error('Missing --event <path> or --fixture <name>');
+function hasDeprecatedFlags(args: string[]): string[] {
+  return ['--event', '--fixture', '--raw'].filter(flag => args.includes(flag));
 }
 
-function cmdNotify(args: string[], deps: CliDeps): void {
-  const eventPath = getOption(args, '--event');
-  if (!eventPath) throw new Error('Usage: learning-loop-reporter notify --event <path>');
-  if (!deps.existsSync(eventPath)) throw new Error(`Event file not found: ${eventPath}`);
-
-  const event = loadJsonFile(eventPath);
-  const message = renderReport(buildAssembleOpts(event));
-  const result = deps.sendToAllChannels(deps.loadConfig(getConfigPath()), message);
-
-  if (result.sent > 0) {
-    deps.archiveEvent(eventPath);
-    deps.stdout(`✅ Sent to ${result.sent} channel(s), event archived.`);
-    if (result.errors.length > 0) deps.stderr(`⚠️ Some channels failed: ${result.errors.join('; ')}`);
-    return;
-  }
-
-  throw new Error(result.errors[0] ?? 'Failed to send to any channel.');
+export function getTodayInShanghai(now: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(now);
 }
 
-function cmdPreview(args: string[], deps: CliDeps): void {
-  const raw = args.includes('--raw');
-  const event = requireEventOrFixture(args);
-  if (raw) {
-    deps.stdout(JSON.stringify(assembleReportData(buildAssembleOpts(event)), null, 2));
-    return;
+function loadRequestedReport(args: string[], deps: CliDeps): DailyReport {
+  const reportPath = getOption(args, '--report');
+  const date = getOption(args, '--date') ?? getTodayInShanghai(deps.now());
+  const workspaceDir = getWorkspaceDir();
+
+  if (reportPath) {
+    const report = deps.loadDailyReportFromPath(reportPath);
+    if (report) return report;
+    throw new Error(`Report not found: ${reportPath}`);
   }
-  deps.stdout(renderReport(buildAssembleOpts(event)).trimEnd());
+
+  const report = deps.loadDailyReport(workspaceDir, date);
+  if (report) return report;
+
+  const latest = deps.loadLatestDailyReport(workspaceDir);
+  if (latest) {
+    throw new Error(`Daily report not found for ${date}. Latest available: ${latest.meta.date} (${latest.filepath})`);
+  }
+
+  throw new Error(`Daily report not found for ${date}`);
+}
+
+async function cmdPreview(args: string[], deps: CliDeps): Promise<void> {
+  const deprecated = hasDeprecatedFlags(args);
+  if (deprecated.length > 0) {
+    deps.stderr(`Deprecated flags removed in v0.5.0: ${deprecated.join(', ')}`);
+    throw new Error('Use --date YYYY-MM-DD or --report <path> instead.');
+  }
+
+  const report = loadRequestedReport(args, deps);
+  deps.stdout(renderForFeishu(report).trimEnd());
+}
+
+async function cmdNotify(args: string[], deps: CliDeps): Promise<void> {
+  const deprecated = hasDeprecatedFlags(args);
+  if (deprecated.length > 0) {
+    deps.stderr(`Deprecated flags removed in v0.5.0: ${deprecated.join(', ')}`);
+    throw new Error('Use --date YYYY-MM-DD or --report <path> instead.');
+  }
+
+  const report = loadRequestedReport(args, deps);
+  const result = await deps.sendToAllChannels(deps.loadConfig(getConfigPath()), renderForFeishu(report));
+
+  if (!result.success) {
+    throw new Error(result.errors[0] ?? 'Failed to send to any channel.');
+  }
+
+  deps.stdout(`✅ Sent daily report to ${result.channels} channel(s): ${report.filepath}`);
+  if (result.errors.length > 0) {
+    deps.stderr(`⚠️ Some channels failed: ${result.errors.join('; ')}`);
+  }
 }
 
 async function cmdHealth(deps: CliDeps): Promise<void> {
   let ok = true;
   const configPath = getConfigPath();
+  const workspaceDir = getWorkspaceDir();
 
   if (deps.existsSync(configPath)) {
-    deps.stdout(`✅ Config: ${configPath}`);
     const config = deps.loadConfig(configPath);
+    deps.stdout(`✅ Config: ${configPath}`);
     deps.stdout(`   Channels: ${config.channels.length}`);
   } else {
     deps.stdout(`❌ Config not found: ${configPath}`);
     ok = false;
   }
 
-  const paths = getDefaultPaths();
-  deps.stdout(`✅ Candidates dir: ${deps.existsSync(paths.candidatesDir) ? 'exists' : 'missing'}`);
+  const latest = deps.loadLatestDailyReport(workspaceDir);
+  if (latest) {
+    deps.stdout(`✅ Latest report: ${latest.filepath}`);
+  } else {
+    deps.stdout(`❌ No daily reports found under ${join(workspaceDir, 'learn', 'reports')}`);
+    ok = false;
+  }
+
   if (!ok) deps.exit(1);
 }
 
@@ -136,10 +156,10 @@ export async function runCli(argv: string[], deps: Partial<CliDeps> = {}): Promi
   try {
     switch (command) {
       case 'notify':
-        cmdNotify(args, merged);
+        await cmdNotify(args, merged);
         return;
       case 'preview':
-        cmdPreview(args, merged);
+        await cmdPreview(args, merged);
         return;
       case 'health':
         await cmdHealth(merged);
@@ -159,4 +179,4 @@ if (import.meta.url === invokedPath) {
   void runCli(process.argv.slice(2));
 }
 
-export { USAGE, getConfigPath, getDefaultPaths, loadFixture, buildAssembleOpts, basename };
+export { USAGE };
