@@ -1,0 +1,33 @@
+📚 自学习闭环日报 {{ date }}
+
+📊 反思摘要
+- 采集 events: {{ reflection.events_collected }}
+- 新增候选: {{ reflection.candidates_generated }}（dropped {{ reflection.candidates_dropped }}）
+- watermark: {{ reflection.watermark_before }} → {{ reflection.watermark_after }}
+- 耗时: {{ duration_seconds }}s
+
+📈 候选状态总览
+- pending: {{ candidates_summary.pending }}
+- reviewing: {{ candidates_summary.reviewing }}
+- shadow: {{ candidates_summary.shadow }}
+- graduated: {{ candidates_summary.graduated }}
+
+🎓 高 confidence 候选（≥ 0.7）
+{{#high_confidence}}
+- {{ id }} | {{ domain }} | conf {{ confidence }}
+{{/high_confidence}}
+{{^high_confidence}}
+- 暂无（candidates 都在 < 0.7）
+{{/high_confidence}}
+
+{{#errors_present}}
+⚠️ 本次有错误
+{{#errors}}
+- {{ . }}
+{{/errors}}
+{{/errors_present}}
+
+📁 详情命令
+- 查看候选: openclaw-learn review list
+- 候选详情: openclaw-learn review show <id>
+- 整体状态: openclaw-learn status

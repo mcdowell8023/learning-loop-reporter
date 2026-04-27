@@ -1,0 +1,22 @@
+{
+  "name": "@openclaw/learning-loop-reporter",
+  "version": "0.1.0",
+  "description": "Feishu notification reporter for @openclaw/self-learning-loop reflection events",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "learning-loop-reporter": "bin/reporter.sh"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "files": ["dist", "bin", "templates", "SKILL.md"],
+  "keywords": ["openclaw", "learning-loop", "reporter", "feishu"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^3.1.0",
+    "@types/node": "^22.0.0"
+  }
+}
