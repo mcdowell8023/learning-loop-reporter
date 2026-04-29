@@ -23,11 +23,11 @@ exports[`renderForFeishu > renders dropped day snapshot 1`] = `
 - low_signal: 1
 
 ## 📚 候选库快照
-候选库共 10 条（pending 9 / reviewing 1）。表格已省略，查看完整报告。
+候选库共 10 条（待审 9 / 审核中 1）。表格已省略，查看完整报告。
 
 ## 🎯 行动建议
 
-1. 检查 dropped 原因是否需要调阈值。
+1. 今天新增 1 条候选，优先先审新候选，避免继续堆积。
 
 📁 完整报告：/home/mcdowell/open-claw-output/code/learning-loop-reporter/fixtures/with-dropped.md
 "
@@ -53,11 +53,11 @@ exports[`renderForFeishu > renders empty day snapshot 1`] = `
 无超期候选。
 
 ## 📚 候选库快照
-候选库共 8 条（pending 8）。表格已省略，查看完整报告。
+候选库共 8 条（待审 8）。表格已省略，查看完整报告。
 
 ## 🎯 行动建议
 
-1. 明天继续观察。
+1. 今日无明显阻塞，继续观察下一轮日报。
 
 📁 完整报告：/home/mcdowell/open-claw-output/code/learning-loop-reporter/fixtures/empty-day.md
 "
@@ -74,21 +74,21 @@ exports[`renderForFeishu > renders sample report snapshot 1`] = `
 - **采集事件：** 3002
 - **新增候选：** 3
 - **被丢弃：** 0
-- **候选库总数：** 14（pending 14 / reviewing 0 / shadow 0 / graduated 0）
+- **候选库总数：** 14（待审 14 / 审核中 0 / 影子验证 0 / 已毕业 0）
 
 ## 🆕 今日新增候选
 
-### 1. Heartbeat Gate Misuse \`heartbeat_gate_misuse\`
+### 1. 误用 HEARTBEAT gate
 
 - **ID：** \`sha256:5b7c844400add46f3ee3345742960c26168eb436aa76f8f370a23bad64b23488\`（短：5b7c8444）
-- **状态：** pending
+- **状态：** 待审
 - **创建时间：** 2026-04-27T08:42:41.228Z
 
 **触发条件：**
 > 用户要求读取 HEARTBEAT.md 并在无任务时回 HEARTBEAT_OK
 
 **建议行动：**
-> 在每次指令到来时先检查 HEARTBEAT.md
+> 当前建议：先判断这是不是心跳场景，再决定是静默、记账还是升级处理。
 
 ## ⚠️ 被丢弃的候选
 
@@ -99,13 +99,18 @@ exports[`renderForFeishu > renders sample report snapshot 1`] = `
 无超期候选。
 
 ## 📚 候选库快照
-候选库共 14 条（pending 14）。表格已省略，查看完整报告。
+候选库共 14 条（待审 14）。仅显示最近 3 条，完整表格见附件。
+
+| ID | 标题 | 状态 | 创建于 | 龄期 |
+|----|------|------|--------|------|
+| 5b7c8444 | 误用 HEARTBEAT gate | 待审 | 2026-04-27 | 0 天 |
+| f6130046 | 子代理输出格式约束执行 | 待审 | 2026-04-27 | 0 天 |
+| 95adad39 | 遇阻即暂停规则 | 待审 | 2026-04-27 | 0 天 |
 
 ## 🎯 行动建议
 
-1. review 新候选（命令：\`openclaw-learn review show <ID>\`）
-2. 处理超期未审：\`openclaw-learn review list --status pending\`
-3. 查看完整候选：\`ls ~/.openclaw/workspace/learn/candidates/\`
+1. 今天新增 3 条候选，优先先审新候选，避免继续堆积。
+2. 候选库已累积 14 条待审，建议今天至少完成一轮 review。
 
 📁 完整报告：/home/mcdowell/open-claw-output/code/learning-loop-reporter/fixtures/sample-daily-report.md
 "
@@ -135,11 +140,12 @@ exports[`renderForFeishu > renders stale day snapshot 1`] = `
 - 候选 B（7 天）
 
 ## 📚 候选库快照
-候选库共 12 条（pending 10 / reviewing 2）。表格已省略，查看完整报告。
+候选库共 12 条（待审 10 / 审核中 2）。表格已省略，查看完整报告。
 
 ## 🎯 行动建议
 
-1. 今天先 review 超期项。
+1. 今天新增 1 条候选，优先先审新候选，避免继续堆积。
+2. 当前有 2 条超期未审，先清理 backlog。
 
 📁 完整报告：/home/mcdowell/open-claw-output/code/learning-loop-reporter/fixtures/with-stale.md
 "
