@@ -4,6 +4,13 @@ import { join } from 'node:path';
 import { loadDailyReport, loadDailyReportFromPath, loadLatestDailyReport, type DailyReport } from './loaders/daily-report-loader.js';
 import { renderForFeishu } from './render.js';
 import { loadConfig, sendToAllChannels } from './send.js';
+import {
+  writeDeliveryMarker,
+  hashMessage,
+  countRecentMarkers,
+  getMarkerDir,
+  type DeliveryMarker,
+} from './delivery-marker.js';
 
 const USAGE = `Usage: learning-loop-reporter <command> [options]
 
@@ -28,6 +35,8 @@ export interface CliDeps {
   loadDailyReport: typeof loadDailyReport;
   loadDailyReportFromPath: typeof loadDailyReportFromPath;
   loadLatestDailyReport: typeof loadLatestDailyReport;
+  writeDeliveryMarker: typeof writeDeliveryMarker;
+  countRecentMarkers: typeof countRecentMarkers;
   now: () => Date;
 }
 
@@ -41,6 +50,8 @@ const defaultDeps: CliDeps = {
   loadDailyReport,
   loadDailyReportFromPath,
   loadLatestDailyReport,
+  writeDeliveryMarker,
+  countRecentMarkers,
   now: () => new Date(),
 };
 
@@ -112,13 +123,56 @@ async function cmdNotify(args: string[], deps: CliDeps): Promise<void> {
   }
 
   const report = loadRequestedReport(args, deps);
-  const result = await deps.sendToAllChannels(deps.loadConfig(getConfigPath()), renderForFeishu(report));
+  const date = getOption(args, '--date') ?? getTodayInShanghai(deps.now());
+  const config = deps.loadConfig(getConfigPath());
+  const rendered = renderForFeishu(report);
+
+  const result = await deps.sendToAllChannels(config, rendered, report.filepath);
 
   if (!result.success) {
+    // 投递失败：不写 marker，stderr 输出可解析 JSON
+    const errPayload = {
+      reason: 'send_failed',
+      code: 'DELIVERY_FAILED',
+      errors: result.errors,
+      date,
+      report_filepath: report.filepath,
+    };
+    deps.stderr(JSON.stringify(errPayload));
     throw new Error(result.errors[0] ?? 'Failed to send to any channel.');
   }
 
-  deps.stdout(`✅ Sent daily report to ${result.channels} channel(s): ${report.filepath}`);
+  // 写 marker：从首个成功通道取 messageId / target
+  const firstSuccess = result.results.find(r => r.success);
+  const messageId = result.messageId ?? firstSuccess?.messageId ?? 'unknown';
+  const channel = firstSuccess?.channel ?? config.channels[0]?.type ?? 'unknown';
+  const target = firstSuccess?.target ?? config.channels[0]?.target ?? 'unknown';
+
+  const marker: DeliveryMarker = {
+    messageId,
+    channel,
+    target,
+    ts: deps.now().toISOString(),
+    report_filepath: report.filepath,
+    message_hash: hashMessage(rendered),
+  };
+
+  try {
+    const markerPath = deps.writeDeliveryMarker(date, marker);
+    deps.stdout(`投递验证通过 messageId=${messageId} channels=${result.channels} marker=${markerPath}`);
+  } catch (err) {
+    const errPayload = {
+      reason: 'marker_write_failed',
+      code: 'MARKER_IO',
+      error: (err as Error).message,
+      date,
+      report_filepath: report.filepath,
+      messageId,
+    };
+    deps.stderr(JSON.stringify(errPayload));
+    throw new Error(`Marker write failed: ${(err as Error).message}`);
+  }
+
   if (result.errors.length > 0) {
     deps.stderr(`⚠️ Some channels failed: ${result.errors.join('; ')}`);
   }
@@ -144,6 +198,20 @@ async function cmdHealth(deps: CliDeps): Promise<void> {
   } else {
     deps.stdout(`❌ No daily reports found under ${join(workspaceDir, 'learn', 'reports')}`);
     ok = false;
+  }
+
+  // Marker 目录健康度（最近 7 天）
+  const markerDir = getMarkerDir(workspaceDir);
+  const markerStats = deps.countRecentMarkers(7, deps.now(), workspaceDir);
+  if (markerStats.valid >= 1) {
+    deps.stdout(`✅ Delivery markers (last 7d): ${markerStats.valid}/${markerStats.total} valid (${markerDir})`);
+    if (markerStats.missing.length > 0) {
+      deps.stdout(`   Missing dates: ${markerStats.missing.join(', ')}`);
+    }
+  } else {
+    deps.stdout(`⚠️  Delivery markers (last 7d): 0/${markerStats.total} valid (${markerDir})`);
+    deps.stdout(`   Missing dates: ${markerStats.missing.join(', ')}`);
+    // 首次安装允许为 0，不作为硬失败；daily-reflect.sh 负责验证当日 marker。
   }
 
   if (!ok) deps.exit(1);
