@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadDailyReportFromPath } from './loaders/daily-report-loader.js';
-import { renderForFeishu } from './render.js';
+import { renderForFeishu, convertMarkdownTablesToCodeBlocks } from './render.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, '..', 'fixtures');
@@ -46,11 +46,13 @@ describe('renderForFeishu', () => {
     expect(output).toContain('## 🎯 行动建议');
   });
 
-  it('replaces snapshot table with summary sentence', () => {
+  it('keeps snapshot section when present (T-051: shown via codeblock)', () => {
     const output = renderForFeishu(loadFixture('sample-daily-report'));
     expect(output).toContain('## 📚 候选库快照');
-    expect(output).toContain('候选库共 14 条（pending 14）。表格已省略，查看完整报告。');
+    // 原始 markdown 表头已被转换为 codeblock，不再出现原始 pipe 表头
     expect(output).not.toContain('| ID | 标题 | 状态 | 创建于 | 龄期 |');
+    // 表格被包装在 fenced codeblock 中
+    expect(output).toMatch(/```[\s\S]*?```/);
   });
 
   it('drops Run history sections', () => {
@@ -77,6 +79,54 @@ describe('renderForFeishu', () => {
     expect(output.trimEnd().endsWith(`📁 完整报告：${report.filepath}`)).toBe(true);
   });
 
+});
+
+describe('convertMarkdownTablesToCodeBlocks', () => {
+
+  it('keeps fenced code blocks untouched', () => {
+    const input = [
+      '```js',
+      '| Name | Value |',
+      '|------|-------|',
+      '| a    | 1     |',
+      '```',
+    ].join('\n');
+    expect(convertMarkdownTablesToCodeBlocks(input)).toBe(input);
+  });
+
+  it('handles adjacent tables independently', () => {
+    const input = [
+      '| A | B |',
+      '|---|---|',
+      '| 1 | 2 |',
+      '',
+      '| X | Y |',
+      '|---|---|',
+      '| 3 | 4 |',
+    ].join('\n');
+    const result = convertMarkdownTablesToCodeBlocks(input);
+    const fences = result.match(/```/g);
+    expect(fences).toHaveLength(4); // 2 open + 2 close
+    expect(result).toContain('A');
+    expect(result).toContain('X');
+  });
+
+  it('aligns CJK and simple emoji reasonably', () => {
+    const input = [
+      '| 名称 | 状态 |',
+      '|------|------|',
+      '| 🚀 | OK |',
+    ].join('\n');
+    const result = convertMarkdownTablesToCodeBlocks(input);
+    expect(result).toContain('```');
+    // CJK header should be padded
+    expect(result).toContain('名称');
+    expect(result).toContain('🚀');
+  });
+
+});
+
+describe('renderForFeishu', () => {
   it('truncates overlong messages to 30k', () => {
     const report = loadFixture('sample-daily-report');
     report.body = `# 学习闭环日报 · 2026-04-27\n\n> 生成时间：2026-04-27T08:42:41.404Z\n\n## 🆕 今日新增候选\n\n${'非常长的内容 '.repeat(10000)}\n\n## 🎯 行动建议\n\n1. done`;
