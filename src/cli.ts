@@ -15,7 +15,7 @@ import {
 const USAGE = `Usage: learning-loop-reporter <command> [options]
 
 Commands:
-  notify   [--date YYYY-MM-DD] [--report <path>]   Send rendered daily report
+  notify   [--date YYYY-MM-DD] [--report <path>] [--allow-real-send]   Send rendered daily report
   preview  [--date YYYY-MM-DD] [--report <path>]   Print rendered message to stdout
   health                                         Self-check (config + reports)
 
@@ -122,59 +122,67 @@ async function cmdNotify(args: string[], deps: CliDeps): Promise<void> {
     throw new Error('Use --date YYYY-MM-DD or --report <path> instead.');
   }
 
+  const allowRealSend = args.includes('--allow-real-send');
   const report = loadRequestedReport(args, deps);
   const date = getOption(args, '--date') ?? getTodayInShanghai(deps.now());
   const config = deps.loadConfig(getConfigPath());
   const rendered = renderForFeishu(report);
 
-  const result = await deps.sendToAllChannels(config, rendered, report.filepath);
-
-  if (!result.success) {
-    // 投递失败：不写 marker，stderr 输出可解析 JSON
-    const errPayload = {
-      reason: 'send_failed',
-      code: 'DELIVERY_FAILED',
-      errors: result.errors,
-      date,
-      report_filepath: report.filepath,
-    };
-    deps.stderr(JSON.stringify(errPayload));
-    throw new Error(result.errors[0] ?? 'Failed to send to any channel.');
-  }
-
-  // 写 marker：从首个成功通道取 messageId / target
-  const firstSuccess = result.results.find(r => r.success);
-  const messageId = result.messageId ?? firstSuccess?.messageId ?? 'unknown';
-  const channel = firstSuccess?.channel ?? config.channels[0]?.type ?? 'unknown';
-  const target = firstSuccess?.target ?? config.channels[0]?.target ?? 'unknown';
-
-  const marker: DeliveryMarker = {
-    messageId,
-    channel,
-    target,
-    ts: deps.now().toISOString(),
-    report_filepath: report.filepath,
-    message_hash: hashMessage(rendered),
-  };
-
+  const prevAllowRealSend = process.env.ALLOW_REAL_SEND;
+  if (allowRealSend) process.env.ALLOW_REAL_SEND = '1';
   try {
-    const markerPath = deps.writeDeliveryMarker(date, marker);
-    deps.stdout(`投递验证通过 messageId=${messageId} channels=${result.channels} marker=${markerPath}`);
-  } catch (err) {
-    const errPayload = {
-      reason: 'marker_write_failed',
-      code: 'MARKER_IO',
-      error: (err as Error).message,
-      date,
-      report_filepath: report.filepath,
-      messageId,
-    };
-    deps.stderr(JSON.stringify(errPayload));
-    throw new Error(`Marker write failed: ${(err as Error).message}`);
-  }
+    const result = await deps.sendToAllChannels(config, rendered);
 
-  if (result.errors.length > 0) {
-    deps.stderr(`⚠️ Some channels failed: ${result.errors.join('; ')}`);
+    if (!result.success) {
+      const errPayload = {
+        reason: 'send_failed',
+        code: 'DELIVERY_FAILED',
+        errors: result.errors,
+        date,
+        report_filepath: report.filepath,
+      };
+      deps.stderr(JSON.stringify(errPayload));
+      throw new Error(result.errors[0] ?? 'Failed to send to any channel.');
+    }
+
+    const firstSuccess = result.results.find((r: { success?: boolean; messageId?: string; channel?: string; target?: string }) => r.success);
+    const messageId = result.messageId ?? firstSuccess?.messageId ?? 'unknown';
+    const channel = firstSuccess?.channel ?? config.channels[0]?.type ?? 'unknown';
+    const target = firstSuccess?.target ?? config.channels[0]?.target ?? 'unknown';
+
+    const marker: DeliveryMarker = {
+      messageId,
+      channel,
+      target,
+      ts: deps.now().toISOString(),
+      report_filepath: report.filepath,
+      message_hash: hashMessage(rendered),
+    };
+
+    try {
+      const markerPath = deps.writeDeliveryMarker(date, marker);
+      deps.stdout(`投递验证通过 messageId=${messageId} channels=${result.channels} marker=${markerPath}`);
+    } catch (err) {
+      const errPayload = {
+        reason: 'marker_write_failed',
+        code: 'MARKER_IO',
+        error: (err as Error).message,
+        date,
+        report_filepath: report.filepath,
+        messageId,
+      };
+      deps.stderr(JSON.stringify(errPayload));
+      throw new Error(`Marker write failed: ${(err as Error).message}`);
+    }
+
+    if (result.errors.length > 0) {
+      deps.stderr(`⚠️ Some channels failed: ${result.errors.join('; ')}`);
+    }
+  } finally {
+    if (allowRealSend) {
+      if (prevAllowRealSend === undefined) delete process.env.ALLOW_REAL_SEND;
+      else process.env.ALLOW_REAL_SEND = prevAllowRealSend;
+    }
   }
 }
 

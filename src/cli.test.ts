@@ -77,6 +77,12 @@ describe('cli', () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
+  it('notify supports explicit allow-real-send flag wiring', async () => {
+    const { deps } = createDeps();
+    await runCli(['notify', '--allow-real-send'], deps).catch(() => undefined);
+    expect(deps.sendToAllChannels).toHaveBeenCalledOnce();
+  });
+
   it('notify writes delivery marker on success', async () => {
     const { deps, markerCalls } = createDeps();
     await runCli(['notify', '--date', '2026-04-27'], deps).catch(() => undefined);

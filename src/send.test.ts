@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,19 @@ import * as send from './send.js';
 describe('send module', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    delete process.env.OPENCLAW_TEST_MODE;
+    delete process.env.DELIVERY_DRY_RUN;
+    delete process.env.ALLOW_REAL_SEND;
+    delete process.env.NODE_ENV;
+    delete process.env.CI;
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_TEST_MODE;
+    delete process.env.DELIVERY_DRY_RUN;
+    delete process.env.ALLOW_REAL_SEND;
+    delete process.env.NODE_ENV;
+    delete process.env.CI;
   });
 
   it('loadConfig throws on missing file', () => {
@@ -95,6 +108,29 @@ describe('send module', () => {
     const cmd = send.buildFeishuSendCommand('ou_test', 'hello', '/tmp/report.md');
     expect(cmd).toContain("--media '/tmp/report.md'");
     expect(cmd).toContain("-m 'hello'");
+  });
+
+  it('sendToFeishu dry-runs when OPENCLAW_TEST_MODE=1', async () => {
+    process.env.OPENCLAW_TEST_MODE = '1';
+    const spy = vi.spyOn(send, 'buildFeishuSendCommand');
+    const result = await send.sendToFeishu('ou_test', 'msg');
+    expect(result.messageId).toMatch(/^dryrun_/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('sendToFeishu dry-runs when DELIVERY_DRY_RUN=1', async () => {
+    process.env.DELIVERY_DRY_RUN = '1';
+    const spy = vi.spyOn(send, 'buildFeishuSendCommand');
+    const result = await send.sendToFeishu('ou_test', 'msg');
+    expect(result.messageId).toMatch(/^dryrun_/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('sendToFeishu mock target always dry-runs', async () => {
+    const spy = vi.spyOn(send, 'buildFeishuSendCommand');
+    const result = await send.sendToFeishu('mock://audit', 'msg');
+    expect(result.messageId).toMatch(/^dryrun_/);
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('buildFeishuSendCommand escapes single quotes in inputs', () => {

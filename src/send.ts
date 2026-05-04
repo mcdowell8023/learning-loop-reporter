@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 
 export interface ChannelConfig {
@@ -99,11 +100,38 @@ function findMessageId(obj: unknown): string | undefined {
   return undefined;
 }
 
+function isMockTarget(target: string): boolean {
+  return target.startsWith('mock://');
+}
+
+function shouldDryRunSend(): boolean {
+  if (process.env.ALLOW_REAL_SEND === '1') return false;
+  if (process.env.DELIVERY_DRY_RUN === '1') return true;
+  if (process.env.OPENCLAW_TEST_MODE === '1') return true;
+  return false;
+}
+
+function syntheticMessageId(target: string, message: string): string {
+  return `dryrun_${createHash('sha256').update(`${target}\n${message}`, 'utf8').digest('hex').slice(0, 12)}`;
+}
+
+function isExplicitRealSendAllowed(): boolean {
+  return process.env.ALLOW_REAL_SEND === '1';
+}
+
 export async function sendToFeishu(
   target: string,
   message: string,
   attachmentPath?: string,
 ): Promise<{ messageId?: string }> {
+  if (isMockTarget(target) || shouldDryRunSend()) {
+    return { messageId: syntheticMessageId(target, message) };
+  }
+
+  if (!isExplicitRealSendAllowed() && (process.env.NODE_ENV === 'test' || process.env.CI === '1')) {
+    return { messageId: syntheticMessageId(target, message) };
+  }
+
   const stdout = execSync(buildFeishuSendCommand(target, message, attachmentPath), {
     timeout: 30000,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -117,6 +145,7 @@ export async function sendToAllChannels(
   attachmentPath?: string,
   sender: typeof sendToFeishu = sendToFeishu,
 ): Promise<SendResult> {
+  const dryRun = shouldDryRunSend();
   let channels = 0;
   const errors: string[] = [];
   const results: ChannelSendResult[] = [];
