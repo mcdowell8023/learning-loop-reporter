@@ -40,19 +40,16 @@ describe('renderForFeishu', () => {
 
   it('includes required sections when present', () => {
     const output = renderForFeishu(loadFixture('sample-daily-report'));
-    expect(output).toContain('## 📊 总览');
-    expect(output).toContain('## 🆕 今日新增候选');
-    expect(output).toContain('## ⏰ 超期未审（pending ≥ 4 天）');
     expect(output).toContain('## 🎯 行动建议');
+    expect(output).toContain('## 🆕 今日新增候选');
+    expect(output).toContain('## 📊 总览');
+    expect(output).toContain('## ⚠️ 被丢弃的候选');
   });
 
-  it('keeps snapshot section when present (T-051: shown via codeblock)', () => {
+  it('does not extract details-wrapped snapshot into feishu output', () => {
     const output = renderForFeishu(loadFixture('sample-daily-report'));
-    expect(output).toContain('## 📚 候选库快照');
-    // 原始 markdown 表头已被转换为 codeblock，不再出现原始 pipe 表头
-    expect(output).not.toContain('| ID | 标题 | 状态 | 创建于 | 龄期 |');
-    // 表格被包装在 fenced codeblock 中
-    expect(output).toMatch(/```[\s\S]*?```/);
+    // <details> content is not extracted as a separate section
+    expect(output).not.toContain('## 📚 候选库快照');
   });
 
   it('drops Run history sections', () => {
@@ -67,10 +64,9 @@ describe('renderForFeishu', () => {
     expect(output).toContain('duplicate');
   });
 
-  it('keeps stale section when present', () => {
+  it('does not include stale section (removed in T-059)', () => {
     const output = renderForFeishu(loadFixture('with-stale'));
-    expect(output).toContain('## ⏰ 超期未审（pending ≥ 4 天）');
-    expect(output).toContain('超期 2 条');
+    expect(output).not.toContain('## ⏰ 超期未审');
   });
 
   it('always appends full report path', () => {

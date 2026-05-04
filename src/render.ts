@@ -2,12 +2,10 @@ import type { DailyReport } from './loaders/daily-report-loader.js';
 
 const MAX_FEISHU_CHARS = 30000;
 const TARGET_SECTIONS = [
-  '## 📊 总览',
-  '## 🆕 今日新增候选',
-  '## ⚠️ 被丢弃的候选',
-  '## ⏰ 超期未审（pending ≥ 4 天）',
-  '## 📚 候选库快照',
   '## 🎯 行动建议',
+  '## 🆕 今日新增候选',
+  '## 📊 总览',
+  '## ⚠️ 被丢弃的候选',
 ] as const;
 
 /**
